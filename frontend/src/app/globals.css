@@ -1,0 +1,441 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #f8fafc;
+  --color-card: #ffffff;
+  --color-border: #e2e8f0;
+  --color-primary: #008075;
+  --color-secondary: #008075;
+  --color-text: #0f172a;
+  --color-text-muted: #475569;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+}
+
+:root.dark {
+  --color-bg: #090d16;
+  --color-card: #111827;
+  --color-border: #1f2937;
+  --color-primary: #02c39a;
+  --color-secondary: #00a896;
+  --color-text: #f9fafb;
+  --color-text-muted: #9ca3af;
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-card: var(--color-card);
+  --color-border: var(--color-border);
+  --color-primary: var(--color-primary);
+  --color-secondary: var(--color-secondary);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-success: var(--color-success);
+  --color-warning: var(--color-warning);
+  --color-danger: var(--color-danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-bg);
+}
+
+/* Hover tooltip injected into the chart canvas overlay by MetricChart's
+   uPlot plugin — styled here because the plugin builds raw DOM, outside
+   React's className handling. */
+.aruzor-chart-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 20;
+  pointer-events: none;
+  min-width: 120px;
+  max-width: 260px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-card);
+  color: var(--color-text);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.aruzor-tt-time {
+  margin-bottom: 3px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.aruzor-tt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aruzor-tt-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 2px;
+}
+
+.aruzor-tt-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+
+.aruzor-tt-val {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* uPlot draws its drag-to-zoom selection box with inline styles that
+   don't follow the theme; tint it with the brand color instead. */
+.u-select {
+  background: rgb(2 195 154 / 15%);
+  border: 1px solid rgb(2 195 154 / 45%);
+}
+
+/* Responsive tables.
+   A four-column table on a 390px phone shows two of its columns and hides
+   the rest behind a horizontal scroll almost nobody discovers — on the
+   Users page that buried the delete button, on Logs the event and source
+   address. Below the small breakpoint each row becomes a stacked card and
+   the column headings move onto the cells themselves, so every value stays
+   reachable without sideways scrolling. */
+@media (max-width: 640px) {
+  .aruzor-table-wrap {
+    overflow-x: visible;
+  }
+
+  .aruzor-table {
+    min-width: 0 !important;
+  }
+
+  /* Headings are still read by screen readers via the cells' data-label. */
+  .aruzor-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .aruzor-table tr {
+    display: block;
+    padding: 0.35rem 0;
+  }
+
+  .aruzor-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.4rem 1rem;
+  }
+
+  .aruzor-table td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+
+  /* Loading and empty-state rows span the table and have no column to name. */
+  .aruzor-table td[colspan]::before {
+    content: none;
+  }
+
+  .aruzor-table td[colspan] {
+    display: block;
+  }
+}
+
+/* Installed-app safe areas.
+   The manifest asks for viewport-fit: cover so the page background reaches
+   the screen edges instead of letterboxing, which puts the header under the
+   notch and the page bottom under the home indicator unless the insets are
+   paid back.
+
+   These classes own their padding outright rather than adding an inset on
+   top of a Tailwind utility. Rules here are unlayered, so they win over
+   anything in @layer utilities: an earlier version set only padding-top and
+   padding-inline from env(), which is 0 in a browser tab, and silently
+   zeroed the px-6/py-3 it was sitting next to. Keeping the whole value in
+   one declaration makes that impossible. */
+.aruzor-app-header {
+  padding-top: calc(0.75rem + env(safe-area-inset-top));
+  padding-bottom: 0.75rem;
+  padding-inline: calc(1rem + env(safe-area-inset-left)) calc(1rem + env(safe-area-inset-right));
+}
+
+/* No bottom inset here below md: the tab bar sits under this element and
+   pays that inset itself, so charging it twice would leave a band of dead
+   space above the bar. */
+.aruzor-app-main {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  padding-inline: calc(1rem + env(safe-area-inset-left)) calc(1rem + env(safe-area-inset-right));
+}
+
+/* The rail and the drawer both run the full height of the screen, so in the
+   installed app their first item sits under the status bar and their last
+   under the home indicator. Neither element carries padding of its own —
+   it lives on the items inside — so setting it here adds rather than
+   replaces. */
+.aruzor-app-rail {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+.aruzor-app-banner {
+  padding-block: 0.5rem;
+  padding-inline: calc(1rem + env(safe-area-inset-left)) calc(1rem + env(safe-area-inset-right));
+}
+
+@media (min-width: 640px) {
+  .aruzor-app-header {
+    padding-inline: calc(1.5rem + env(safe-area-inset-left)) calc(1.5rem + env(safe-area-inset-right));
+  }
+
+  .aruzor-app-main {
+    padding-top: 1.5rem;
+    padding-bottom: 1.5rem;
+    padding-inline: calc(1.5rem + env(safe-area-inset-left)) calc(1.5rem + env(safe-area-inset-right));
+  }
+}
+
+/* From md up there is no tab bar, so the page bottom is the screen bottom
+   and has to clear the home indicator on its own. */
+@media (min-width: 768px) {
+  .aruzor-app-main {
+    padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Form controls.
+   Every select in the app wants to look the same, so the styling lives on
+   one class instead of a class string repeated at fifteen call sites that
+   drifts apart over time.
+
+   The background colour is the load-bearing part: a transparent select
+   renders its dropdown list on the platform's own background, so in dark
+   mode the inherited light text landed on a white list and was unreadable
+   on Android and Windows. Painting both the control and its options with
+   the card colour keeps the contrast the theme intends. */
+.aruzor-select,
+.aruzor-input {
+  min-height: 2.5rem;
+  max-width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-card);
+  color: var(--color-text);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.aruzor-select {
+  /* The native arrow is a different size, colour and position on every
+     platform, and on iOS it overlaps the text of a narrow control. */
+  appearance: none;
+  padding-right: 2rem;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23708090' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.625rem center;
+  background-size: 0.875rem;
+}
+
+.aruzor-select option {
+  background-color: var(--color-card);
+  color: var(--color-text);
+}
+
+.aruzor-select:focus-visible,
+.aruzor-input:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Touch devices.
+   Both rules below are keyed on the pointer rather than the viewport width,
+   because the question they answer is "is a finger driving this", not "is
+   the screen narrow" — a 768px tablet is touch-driven and was missed by a
+   width test.
+
+   Safari zooms the whole page in when a control smaller than 16px takes
+   focus and never zooms back out, leaving the page scrolled sideways with
+   the header off-screen. Sizing the text at 16px is the only way to
+   suppress that which does not also stop the user pinch-zooming.
+
+   Below roughly 44px a control is hard to hit with a thumb and the tap
+   lands on its neighbour instead. */
+@media (pointer: coarse) {
+  .aruzor-select,
+  .aruzor-input {
+    font-size: 1rem;
+  }
+
+  .aruzor-select,
+  .aruzor-input,
+  .aruzor-nav-link,
+  .aruzor-tap,
+  button {
+    min-height: 2.75rem;
+  }
+
+  /* A link that is a whole row still has to be a comfortable target, and
+     min-height alone would leave its text pinned to the top of the taller
+     box. */
+  .aruzor-tap {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  button {
+    min-width: 2.75rem;
+  }
+}
+
+/* Narrow screens.
+   Full-width is a layout decision rather than an input one: a control that
+   fills a phone row would look broken filling a tablet row, so this stays
+   on the viewport width. Any desktop min-width has to be cleared with it,
+   or the widened control pushes its row past the viewport. */
+@media (max-width: 640px) {
+  .aruzor-select,
+  .aruzor-input {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Toolbar controls opt out. A form field reads better filling the row,
+     but a control strip is a row of peers: making each one full-width put
+     the dashboard picker, its add button and the host filter on three
+     separate lines and pushed the first chart most of a screen down. These
+     size to their content and wrap as a group instead. */
+  .aruzor-select-auto {
+    width: auto;
+  }
+}
+
+/* App chrome on a phone.
+   A drawer behind a hamburger is a desktop pattern wearing a phone layout:
+   every move between pages costs a tap to open it and a tap to choose. A
+   tab bar keeps the four daily destinations one thumb-stretch away and
+   shows where you are without being opened. */
+.aruzor-tabbar {
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-inline: env(safe-area-inset-left) env(safe-area-inset-right);
+}
+
+.aruzor-tab {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  padding: 0.4rem 0.15rem 0.45rem;
+  min-height: 3.25rem;
+  transition: color 0.12s ease;
+}
+
+.aruzor-tab-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+/* The sheet rises from the edge it is anchored to. Appearing instantly
+   reads as a page swap rather than a panel, which is the whole difference
+   between this and a full-screen menu. */
+.aruzor-sheet {
+  padding-bottom: env(safe-area-inset-bottom);
+  animation: aruzor-sheet-up 0.18s ease-out;
+}
+
+@keyframes aruzor-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aruzor-sheet {
+    animation: none;
+  }
+}
+
+/* Chrome is furniture, not content. Letting a long-press select the tab
+   labels or the title, or flashing a grey box on every tap, is the clearest
+   tell that a page is a web page. Content keeps normal selection so a metric
+   name or a query can still be copied. */
+.aruzor-chrome {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (pointer: coarse) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Without this, scrolling past the end of the page hands the gesture to
+     the browser, which bounces the whole app or triggers pull-to-refresh
+     mid-scroll. */
+  .aruzor-app-main {
+    overscroll-behavior-y: contain;
+  }
+}
+
+/* Below md the top bar already names the page, so the heading underneath it
+   said the same word twice. The help bubble that sits inside some of these
+   headings is a `title` tooltip, which needs a hover a touch screen does not
+   have — it was unreachable on a phone either way, so nothing that worked is
+   lost by hiding the row. The subtitle stays; it carries the explanation. */
+@media (max-width: 767px) {
+  .aruzor-page-title {
+    display: none;
+  }
+}
+
+/* Query and URL text.
+   A PromQL expression or a URL is one long token with no spaces, so the
+   default wrapping rules cannot break it anywhere and it runs straight out
+   of its card — on a 390px screen even a bare metric name did. Breaking
+   mid-token is the lesser evil here: the alternative is a horizontal scroll
+   inside a box nobody thinks to swipe, and this text exists to be read in
+   full. pre-wrap keeps the spacing of a real expression intact. */
+.aruzor-code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

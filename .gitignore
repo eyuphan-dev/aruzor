@@ -1,0 +1,27 @@
+# Backend (Go)
+backend/aruzor.db
+backend/aruzor.db-*
+backend/*.exe
+backend/bin/
+
+# Frontend (Next.js)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/*.tsbuildinfo
+frontend/next-env.d.ts
+
+# Sirlar - asla depoya girmemeli
+.env
+.env.*
+!.env.example
+*.env
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Calisma zamani ciktilari
+*.log

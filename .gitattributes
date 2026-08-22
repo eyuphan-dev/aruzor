@@ -1,0 +1,8 @@
+# Normalise line endings in the repository. Without this a file written on
+# Windows lands with CRLF, and a .gitignore in that state matches nothing
+# because every pattern carries a trailing carriage return.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary

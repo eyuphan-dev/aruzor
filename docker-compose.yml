@@ -1,0 +1,78 @@
+# One command brings up the whole stack: Aruzor, Prometheus, and a
+# node-exporter so there is real data to look at from the first minute.
+# Only one port is published — everything the browser needs goes through
+# the frontend, which proxies /api to the backend internally.
+#
+#   docker compose up -d   →   http://<server>:3000
+#
+# Aruzor discovers what Prometheus is scraping on first load and offers the
+# matching panels, so nothing here needs editing to get a working dashboard.
+
+services:
+  aruzor:
+    build: ./frontend
+    ports:
+      - "${ARUZOR_PORT:-3000}:3000"
+    environment:
+      # Server-side proxy target. Never reaches the browser, so it stays a
+      # container name rather than something tied to the host's address.
+      ARUZOR_BACKEND_URL: "http://backend:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    # Deliberately not published: the API is reached through the frontend.
+    # Publishing it too would mean a second port to firewall and a CORS
+    # origin to keep in sync for no gain.
+    expose:
+      - "8080"
+    environment:
+      ARUZOR_PROMETHEUS_URL: "http://prometheus:9090"
+      ARUZOR_LISTEN_ADDR: ":8080"
+      ARUZOR_DB_PATH: "/data/aruzor.db"
+      # Same-origin requests through the frontend proxy carry no Origin
+      # header that needs allowing; set this only if you expose the API
+      # directly to a browser on another host.
+      ARUZOR_CORS_ORIGIN: "${ARUZOR_CORS_ORIGIN:-}"
+      ARUZOR_ADMIN_EMAIL: "${ARUZOR_ADMIN_EMAIL:-admin@aruzor.local}"
+      ARUZOR_ADMIN_PASSWORD: "${ARUZOR_ADMIN_PASSWORD:-}"
+      # Without this, tokens are signed with a key regenerated on every
+      # restart and everyone is logged out whenever the container recycles.
+      ARUZOR_JWT_SECRET: "${ARUZOR_JWT_SECRET:-}"
+      ARUZOR_TIMEZONE: "${ARUZOR_TIMEZONE:-Europe/Istanbul}"
+      ARUZOR_TELEGRAM_BOT_TOKEN: "${ARUZOR_TELEGRAM_BOT_TOKEN:-}"
+      ARUZOR_TELEGRAM_CHAT_ID: "${ARUZOR_TELEGRAM_CHAT_ID:-}"
+    volumes:
+      - aruzor-data:/data
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    expose:
+      - "9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  # Without an exporter Prometheus scrapes only itself, and a fresh install
+  # opens on a dashboard with nothing to show. This is what makes the
+  # default install actually useful.
+  node-exporter:
+    image: prom/node-exporter:latest
+    expose:
+      - "9100"
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+volumes:
+  aruzor-data:
+  prometheus-data:

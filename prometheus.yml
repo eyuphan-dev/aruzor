@@ -1,0 +1,27 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Host CPU, memory, disk and network. Brought up by docker-compose, so
+  # this works as written with no editing.
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Per-container metrics. Commented out because cAdvisor is not part of
+  # the default stack; add the service and uncomment to have Aruzor detect
+  # it and offer container panels automatically.
+  # - job_name: "cadvisor"
+  #   static_configs:
+  #     - targets: ["cadvisor:8080"]
+
+  # Extra servers: add one target line per machine running node-exporter.
+  # Aruzor labels each series by instance, so they appear as separate lines
+  # on the same panel without any further configuration.
+  # - job_name: "other-hosts"
+  #   static_configs:
+  #     - targets: ["10.0.0.2:9100", "10.0.0.3:9100"]
