@@ -107,8 +107,19 @@ func (c *Checker) checkOne(ctx context.Context, m store.Monitor) {
 	checkCtx, cancel := context.WithTimeout(ctx, totalProbeBudget)
 	defer cancel()
 
-	res := probe(checkCtx, m.Type, m.Target)
+	cfg := httpCheckConfig{
+		method:             m.Method,
+		body:               m.RequestBody,
+		contentType:        m.ContentType,
+		expectedStatuses:   parseExpectedStatus(m.ExpectedStatus),
+		expectBodyContains: m.ExpectBodyContains,
+	}
+	res := probe(checkCtx, m.Type, m.Target, cfg)
 
+	var statusCode *int
+	if res.statusCode != 0 {
+		statusCode = &res.statusCode
+	}
 	check := store.MonitorCheck{
 		ID:          uuid.NewString(),
 		MonitorID:   m.ID,
@@ -119,6 +130,7 @@ func (c *Checker) checkOne(ctx context.Context, m store.Monitor) {
 		ErrorDetail: res.errorDetail,
 		ConnectMs:   res.connectMs,
 		TLSMs:       res.tlsMs,
+		StatusCode:  statusCode,
 		CheckedAt:   time.Now(),
 	}
 	if err := c.db.RecordMonitorCheck(ctx, check, res.certExpiry); err != nil {
@@ -194,6 +206,11 @@ type alertDecision struct {
 // limit — which says nothing about whether it is serving everybody else.
 // Announcing that as an outage would be plainly wrong, so it is recorded
 // and shown in the app but never sent.
+//
+// ClassContentMismatch is deliberately left out of this exclusion — a page
+// that answers but no longer says what it's configured to say (a broken
+// form, a route silently swapped for a maintenance page) is exactly the
+// class of real, user-facing failure this whole feature exists to catch.
 func pagesChat(class string) bool {
 	return class != ClassHTTPBlocked
 }

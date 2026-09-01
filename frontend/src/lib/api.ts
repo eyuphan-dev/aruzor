@@ -372,6 +372,14 @@ export type Monitor = {
   /** Set while a maintenance window is active — down notifications are held back until this time. */
   snoozedUntil?: string;
   createdAt: string;
+
+  // Custom HTTP check config — http monitors only. Empty on tcp monitors
+  // and on any monitor created before this existed.
+  method?: string;
+  requestBody?: string;
+  contentType?: string;
+  expectedStatus?: string;
+  expectBodyContains?: string;
 };
 
 // Uptime across the standard windows a status page reports. A missing
@@ -406,6 +414,7 @@ export type MonitorFailureClass =
   | "http_server"
   | "http_blocked"
   | "http_status"
+  | "content_mismatch"
   | "unknown";
 
 export type MonitorCheck = {
@@ -418,6 +427,8 @@ export type MonitorCheck = {
   errorDetail?: string;
   connectMs?: number;
   tlsMs?: number;
+  /** The raw HTTP status observed, when there was one — absent for TCP checks and pre-response failures. */
+  statusCode?: number;
   checkedAt: string;
 };
 
@@ -457,7 +468,17 @@ export function listMonitors() {
   return apiRequest<Monitor[]>("/api/v1/monitors");
 }
 
-export function createMonitor(input: { name: string; type: MonitorType; target: string; intervalSeconds: number }) {
+export function createMonitor(input: {
+  name: string;
+  type: MonitorType;
+  target: string;
+  intervalSeconds: number;
+  method?: string;
+  requestBody?: string;
+  contentType?: string;
+  expectedStatus?: string;
+  expectBodyContains?: string;
+}) {
   return apiRequest<Monitor>("/api/v1/monitors", {
     method: "POST",
     body: JSON.stringify(input),

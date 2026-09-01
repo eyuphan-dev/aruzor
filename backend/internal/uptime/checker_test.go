@@ -199,7 +199,7 @@ func TestClassifyStatus(t *testing.T) {
 		{503, false, ClassHTTPServerError},
 	}
 	for _, c := range cases {
-		ok, class, detail := classifyStatus(c.code)
+		ok, class, detail := classifyStatus(c.code, nil)
 		if ok != c.wantOK || class != c.wantClass {
 			t.Errorf("HTTP %d -> ok=%v sinif=%q, beklenen ok=%v sinif=%q", c.code, ok, class, c.wantOK, c.wantClass)
 		}
@@ -255,7 +255,7 @@ func TestCauseLabelCoversEveryClass(t *testing.T) {
 	classes := []string{
 		ClassDNS, ClassRefused, ClassTimeoutConnect, ClassTimeoutResponse,
 		ClassTLSCert, ClassTLSHandshake, ClassHTTPServerError, ClassHTTPBlocked,
-		ClassHTTPStatus, ClassUnknown,
+		ClassHTTPStatus, ClassContentMismatch, ClassUnknown,
 	}
 	for _, c := range classes {
 		if label := causeLabel(c, "ayrinti"); label == "" {
@@ -264,5 +264,18 @@ func TestCauseLabelCoversEveryClass(t *testing.T) {
 	}
 	if causeLabel(ClassUnknown, "") == "" {
 		t.Error("ayrinti yokken bile bir sey soylenmeli")
+	}
+}
+
+// A blocked request (403/429) is the far end refusing us specifically, not
+// evidence the site is down for anyone else — that one class must never
+// page the chat. A content mismatch is the opposite: a real, user-facing
+// failure this feature exists to catch, so it must always be allowed to.
+func TestPagesChat_IcerikUyusmazligiBildirir(t *testing.T) {
+	if pagesChat(ClassHTTPBlocked) {
+		t.Error("ClassHTTPBlocked sohbete gitmemeli")
+	}
+	if !pagesChat(ClassContentMismatch) {
+		t.Error("ClassContentMismatch sohbete gitmeli")
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,18 @@ import (
 
 var validMonitorTypes = map[string]bool{"http": true, "tcp": true}
 
+// validMonitorMethods whitelists what a custom HTTP check may send. "" means
+// "not set" — the checker falls back to GET, same as every monitor created
+// before this existed.
+var validMonitorMethods = map[string]bool{
+	"": true, "GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true,
+}
+
+// maxRequestBodyLen caps a monitor's configured request body. This is a
+// recurring scheduled request, not a one-off, so an unbounded body is a
+// standing cost rather than a one-time one.
+const maxRequestBodyLen = 16 * 1024
+
 const monitorUptimeWindow = 30 * 24 * time.Hour
 
 type createMonitorRequest struct {
@@ -20,6 +34,53 @@ type createMonitorRequest struct {
 	Type            string `json:"type"`
 	Target          string `json:"target"`
 	IntervalSeconds int    `json:"intervalSeconds"`
+
+	// Custom HTTP check — http monitors only, all optional. See
+	// validateCustomCheckFields for what's rejected and why.
+	Method             string `json:"method"`
+	RequestBody        string `json:"requestBody"`
+	ContentType        string `json:"contentType"`
+	ExpectedStatus     string `json:"expectedStatus"`
+	ExpectBodyContains string `json:"expectBodyContains"`
+}
+
+// hasCustomCheckFields reports whether any synthetic-check field was set —
+// used to reject them outright on a tcp monitor rather than silently
+// ignoring input the user explicitly typed.
+func (b createMonitorRequest) hasCustomCheckFields() bool {
+	return b.Method != "" || b.RequestBody != "" || b.ContentType != "" || b.ExpectedStatus != "" || b.ExpectBodyContains != ""
+}
+
+// validateCustomCheckFields enforces the boundaries a custom HTTP check has
+// to stay inside. Every case here fails the request outright rather than
+// silently dropping the field — a monitor that looks configured but quietly
+// ignores half its configuration is worse than one that was never allowed
+// to save in the first place.
+func validateCustomCheckFields(b createMonitorRequest) error {
+	if b.Type == "tcp" {
+		if b.hasCustomCheckFields() {
+			return errCustomFieldsOnTCP
+		}
+		return nil
+	}
+	if !validMonitorMethods[b.Method] {
+		return errInvalidMethod
+	}
+	if b.Method == "HEAD" && b.ExpectBodyContains != "" {
+		return errHeadNoBodyAssertion
+	}
+	if len(b.RequestBody) > maxRequestBodyLen {
+		return errRequestBodyTooLarge
+	}
+	if b.ExpectedStatus != "" {
+		for _, part := range strings.Split(b.ExpectedStatus, ",") {
+			code, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil || code < 100 || code > 599 {
+				return errInvalidExpectedStatus
+			}
+		}
+	}
+	return nil
 }
 
 // monitorResponse adds the computed uptime% to the stored monitor fields —
@@ -58,17 +119,26 @@ func (r *Router) handleCreateMonitor(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidMonitorType)
 		return
 	}
+	if err := validateCustomCheckFields(body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if body.IntervalSeconds < 15 || body.IntervalSeconds > 3600 {
 		body.IntervalSeconds = 60
 	}
 
 	m := store.Monitor{
-		ID:              uuid.NewString(),
-		Name:            body.Name,
-		Type:            body.Type,
-		Target:          body.Target,
-		IntervalSeconds: body.IntervalSeconds,
-		CreatedAt:       time.Now(),
+		ID:                 uuid.NewString(),
+		Name:               body.Name,
+		Type:               body.Type,
+		Target:             body.Target,
+		IntervalSeconds:    body.IntervalSeconds,
+		Method:             body.Method,
+		RequestBody:        body.RequestBody,
+		ContentType:        body.ContentType,
+		ExpectedStatus:     body.ExpectedStatus,
+		ExpectBodyContains: body.ExpectBodyContains,
+		CreatedAt:          time.Now(),
 	}
 	if err := r.db.CreateMonitor(req.Context(), m); err != nil {
 		r.log.Error("izleme olusturulamadi", "hata", err.Error())
@@ -140,6 +210,12 @@ type statusPageMonitor struct {
 // when a super_admin has explicitly turned it on via Settings, and only
 // ever exposes a monitor's name/up-down/uptime% — never its target
 // URL/host, which would leak internal network layout to the public.
+//
+// This includes every field the custom HTTP check feature added — method,
+// request body, content type, expected status, expected content. None of
+// them may ever appear here: statusPageMonitor is built by hand below and
+// never embeds store.Monitor, specifically so a new field added to that
+// struct can never leak onto this endpoint by accident.
 func (r *Router) handleStatusPage(w http.ResponseWriter, req *http.Request) {
 	value, _, err := r.db.GetSetting(req.Context(), "status_page_enabled")
 	if err != nil {

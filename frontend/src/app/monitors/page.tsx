@@ -29,6 +29,14 @@ export default function MonitorsPage() {
   const [intervalSeconds, setIntervalSeconds] = useState("60");
   const [submitting, setSubmitting] = useState(false);
 
+  // Custom HTTP check — http monitors only, all optional.
+  const [method, setMethod] = useState("");
+  const [requestBody, setRequestBody] = useState("");
+  const [contentType, setContentType] = useState("");
+  const [expectedStatus, setExpectedStatus] = useState("");
+  const [expectBodyContains, setExpectBodyContains] = useState("");
+  const bodyCapableMethod = method === "POST" || method === "PUT" || method === "PATCH";
+
   const refresh = () => {
     setLoading(true);
     listMonitors()
@@ -50,9 +58,26 @@ export default function MonitorsPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await createMonitor({ name, type, target, intervalSeconds: Number(intervalSeconds) || 60 });
+      await createMonitor({
+        name,
+        type,
+        target,
+        intervalSeconds: Number(intervalSeconds) || 60,
+        ...(type === "http" && {
+          method: method || undefined,
+          requestBody: bodyCapableMethod && requestBody ? requestBody : undefined,
+          contentType: contentType || undefined,
+          expectedStatus: expectedStatus || undefined,
+          expectBodyContains: expectBodyContains || undefined,
+        }),
+      });
       setName("");
       setTarget("");
+      setMethod("");
+      setRequestBody("");
+      setContentType("");
+      setExpectedStatus("");
+      setExpectBodyContains("");
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -133,6 +158,70 @@ export default function MonitorsPage() {
               />
             </div>
           </div>
+
+          {type === "http" && (
+            <details className="rounded-lg border border-[var(--color-border)] p-3">
+              <summary className="cursor-pointer text-xs font-medium text-[var(--color-text-muted)]">
+                {t.monitors.form.advancedToggle}
+              </summary>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.form.method}</label>
+                  <select value={method} onChange={(e) => setMethod(e.target.value)} className="aruzor-select">
+                    <option value="">GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                    <option value="HEAD">HEAD</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.form.contentType}</label>
+                  <input
+                    value={contentType}
+                    onChange={(e) => setContentType(e.target.value)}
+                    placeholder="application/json"
+                    className="aruzor-input font-mono"
+                    disabled={!bodyCapableMethod}
+                  />
+                </div>
+                {bodyCapableMethod && (
+                  <div className="flex flex-col gap-1 sm:col-span-2">
+                    <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.form.requestBody}</label>
+                    <textarea
+                      value={requestBody}
+                      onChange={(e) => setRequestBody(e.target.value)}
+                      rows={3}
+                      className="aruzor-input font-mono"
+                    />
+                    <p className="text-xs text-[var(--color-warning)]">{t.monitors.form.requestBodyWarning}</p>
+                  </div>
+                )}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.form.expectedStatus}</label>
+                  <input
+                    value={expectedStatus}
+                    onChange={(e) => setExpectedStatus(e.target.value)}
+                    placeholder="200,302"
+                    className="aruzor-input font-mono"
+                  />
+                  <p className="text-xs text-[var(--color-text-muted)]">{t.monitors.form.expectedStatusHint}</p>
+                </div>
+                {method !== "HEAD" && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.form.expectBodyContains}</label>
+                    <input
+                      value={expectBodyContains}
+                      onChange={(e) => setExpectBodyContains(e.target.value)}
+                      className="aruzor-input"
+                    />
+                  </div>
+                )}
+              </div>
+            </details>
+          )}
+
           <button
             type="submit"
             disabled={submitting}

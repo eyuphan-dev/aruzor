@@ -167,6 +167,9 @@ export default function MonitorDetailPage() {
               <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 py-2 first:pt-0 last:pb-0">
                 <span className="text-sm font-medium text-[var(--color-danger)]">
                   {t.monitors.failureClasses[c.errorClass ?? "unknown"].label}
+                  {c.statusCode !== undefined && (
+                    <span className="ml-1.5 font-mono text-xs text-[var(--color-text-muted)]">HTTP {c.statusCode}</span>
+                  )}
                 </span>
                 <span className="text-xs text-[var(--color-text-muted)]">
                   {new Date(c.checkedAt).toLocaleString(locale === "tr" ? "tr-TR" : "en-GB")}

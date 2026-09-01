@@ -483,12 +483,24 @@ type Monitor struct {
 	// the check keeps running and history keeps recording, only the alert
 	// is held back. Mirrors alert_rules.snoozed_until.
 	SnoozedUntil *time.Time `json:"snoozedUntil,omitempty"`
+
+	// Custom HTTP check config — http monitors only. Empty on tcp monitors
+	// and on any monitor created before this existed, in which case the
+	// checker falls back to a plain GET with the default 2xx-3xx range,
+	// exactly as it always has.
+	Method             string `json:"method,omitempty"`
+	RequestBody        string `json:"requestBody,omitempty"`
+	ContentType        string `json:"contentType,omitempty"`
+	ExpectedStatus     string `json:"expectedStatus,omitempty"`
+	ExpectBodyContains string `json:"expectBodyContains,omitempty"`
 }
 
 func (s *Store) CreateMonitor(ctx context.Context, m Monitor) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO monitors (id, name, type, target, interval_seconds) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO monitors (id, name, type, target, interval_seconds, method, request_body, content_type, expected_status, expect_body_contains)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Name, m.Type, m.Target, m.IntervalSeconds,
+		m.Method, m.RequestBody, m.ContentType, m.ExpectedStatus, m.ExpectBodyContains,
 	)
 	return err
 }
@@ -496,7 +508,8 @@ func (s *Store) CreateMonitor(ctx context.Context, m Monitor) error {
 func (s *Store) ListMonitors(ctx context.Context) ([]Monitor, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, type, target, interval_seconds, last_ok, last_checked_at, last_latency_ms,
-		        cert_expires_at, alert_state, consecutive_failures, failing_since, snoozed_until, created_at
+		        cert_expires_at, alert_state, consecutive_failures, failing_since, snoozed_until,
+		        method, request_body, content_type, expected_status, expect_body_contains, created_at
 		 FROM monitors ORDER BY created_at ASC`,
 	)
 	if err != nil {
@@ -512,7 +525,8 @@ func (s *Store) ListMonitors(ctx context.Context) ([]Monitor, error) {
 		var lastLatency sql.NullInt64
 		var certExpires, failingSince, snoozedUntil sql.NullTime
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Target, &m.IntervalSeconds, &lastOK, &lastCheckedAt, &lastLatency,
-			&certExpires, &m.AlertState, &m.ConsecutiveFailures, &failingSince, &snoozedUntil, &m.CreatedAt); err != nil {
+			&certExpires, &m.AlertState, &m.ConsecutiveFailures, &failingSince, &snoozedUntil,
+			&m.Method, &m.RequestBody, &m.ContentType, &m.ExpectedStatus, &m.ExpectBodyContains, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		if lastOK.Valid {
@@ -565,12 +579,16 @@ type MonitorCheck struct {
 	// Attempts above one means the check only passed on a retry. That is
 	// not a failure, but it is not health either, and it is the signal the
 	// app shows when the chat stays quiet.
-	Attempts    int       `json:"attempts"`
-	ErrorClass  string    `json:"errorClass,omitempty"`
-	ErrorDetail string    `json:"errorDetail,omitempty"`
-	ConnectMs   *int      `json:"connectMs,omitempty"`
-	TLSMs       *int      `json:"tlsMs,omitempty"`
-	CheckedAt   time.Time `json:"checkedAt"`
+	Attempts    int    `json:"attempts"`
+	ErrorClass  string `json:"errorClass,omitempty"`
+	ErrorDetail string `json:"errorDetail,omitempty"`
+	ConnectMs   *int   `json:"connectMs,omitempty"`
+	TLSMs       *int   `json:"tlsMs,omitempty"`
+	// StatusCode is the raw HTTP response code observed, when there was
+	// one to observe — nil for TCP checks and for any failure that never
+	// got as far as a response (DNS, refused, timeout, TLS).
+	StatusCode *int      `json:"statusCode,omitempty"`
+	CheckedAt  time.Time `json:"checkedAt"`
 }
 
 // RecordMonitorCheck updates the monitor's last-known status and appends a
@@ -593,9 +611,9 @@ func (s *Store) RecordMonitorCheck(ctx context.Context, c MonitorCheck, certExpi
 		}
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO monitor_checks (id, monitor_id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, checked_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.MonitorID, c.OK, c.LatencyMs, c.ErrorClass, c.ErrorDetail, c.Attempts, c.ConnectMs, c.TLSMs, c.CheckedAt,
+		`INSERT INTO monitor_checks (id, monitor_id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, status_code, checked_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.MonitorID, c.OK, c.LatencyMs, c.ErrorClass, c.ErrorDetail, c.Attempts, c.ConnectMs, c.TLSMs, c.StatusCode, c.CheckedAt,
 	)
 	return err
 }
@@ -604,7 +622,7 @@ func (s *Store) RecordMonitorCheck(ctx context.Context, c MonitorCheck, certExpi
 // first, for the detail view and its latency history.
 func (s *Store) ListMonitorChecks(ctx context.Context, monitorID string, limit int) ([]MonitorCheck, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, checked_at
+		`SELECT id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, status_code, checked_at
 		 FROM monitor_checks WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT ?`,
 		monitorID, limit,
 	)
@@ -616,8 +634,8 @@ func (s *Store) ListMonitorChecks(ctx context.Context, monitorID string, limit i
 	checks := []MonitorCheck{}
 	for rows.Next() {
 		var c MonitorCheck
-		var connectMs, tlsMs sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.OK, &c.LatencyMs, &c.ErrorClass, &c.ErrorDetail, &c.Attempts, &connectMs, &tlsMs, &c.CheckedAt); err != nil {
+		var connectMs, tlsMs, statusCode sql.NullInt64
+		if err := rows.Scan(&c.ID, &c.OK, &c.LatencyMs, &c.ErrorClass, &c.ErrorDetail, &c.Attempts, &connectMs, &tlsMs, &statusCode, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		if connectMs.Valid {
@@ -627,6 +645,10 @@ func (s *Store) ListMonitorChecks(ctx context.Context, monitorID string, limit i
 		if tlsMs.Valid {
 			v := int(tlsMs.Int64)
 			c.TLSMs = &v
+		}
+		if statusCode.Valid {
+			v := int(statusCode.Int64)
+			c.StatusCode = &v
 		}
 		checks = append(checks, c)
 	}
@@ -651,7 +673,7 @@ func (s *Store) SetMonitorAlertState(ctx context.Context, monitorID, state strin
 // the caller reduces them to buckets before they leave the server.
 func (s *Store) ListMonitorChecksSince(ctx context.Context, monitorID string, since time.Time) ([]MonitorCheck, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, checked_at
+		`SELECT id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, status_code, checked_at
 		 FROM monitor_checks WHERE monitor_id = ? AND checked_at >= ? ORDER BY checked_at ASC`,
 		monitorID, since,
 	)
@@ -663,8 +685,8 @@ func (s *Store) ListMonitorChecksSince(ctx context.Context, monitorID string, si
 	checks := []MonitorCheck{}
 	for rows.Next() {
 		var c MonitorCheck
-		var connectMs, tlsMs sql.NullInt64
-		if err := rows.Scan(&c.ID, &c.OK, &c.LatencyMs, &c.ErrorClass, &c.ErrorDetail, &c.Attempts, &connectMs, &tlsMs, &c.CheckedAt); err != nil {
+		var connectMs, tlsMs, statusCode sql.NullInt64
+		if err := rows.Scan(&c.ID, &c.OK, &c.LatencyMs, &c.ErrorClass, &c.ErrorDetail, &c.Attempts, &connectMs, &tlsMs, &statusCode, &c.CheckedAt); err != nil {
 			return nil, err
 		}
 		if connectMs.Valid {
@@ -674,6 +696,10 @@ func (s *Store) ListMonitorChecksSince(ctx context.Context, monitorID string, si
 		if tlsMs.Valid {
 			v := int(tlsMs.Int64)
 			c.TLSMs = &v
+		}
+		if statusCode.Valid {
+			v := int(statusCode.Int64)
+			c.StatusCode = &v
 		}
 		checks = append(checks, c)
 	}
@@ -1070,6 +1096,12 @@ func (s *Store) migrate() error {
 		`ALTER TABLE monitor_checks ADD COLUMN tls_ms INTEGER`,
 		`ALTER TABLE monitor_checks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE monitors ADD COLUMN snoozed_until DATETIME`,
+		`ALTER TABLE monitors ADD COLUMN method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitors ADD COLUMN request_body TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitors ADD COLUMN content_type TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitors ADD COLUMN expected_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitors ADD COLUMN expect_body_contains TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE monitor_checks ADD COLUMN status_code INTEGER`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err

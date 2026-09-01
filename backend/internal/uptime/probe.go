@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -28,6 +29,7 @@ const (
 	ClassHTTPServerError = "http_server"      // 5xx
 	ClassHTTPBlocked     = "http_blocked"     // 403 / 429
 	ClassHTTPStatus      = "http_status"      // some other unexpected status
+	ClassContentMismatch = "content_mismatch" // response arrived, status was fine, expected text was not in the body
 	ClassUnknown         = "unknown"
 )
 
@@ -66,6 +68,20 @@ type probeResult struct {
 	attempts int
 }
 
+// httpCheckConfig is the optional synthetic-check shape for an HTTP
+// monitor — a custom method/body, an expected-status allowlist, and a
+// substring the response body must contain. Every field's zero value means
+// "use today's default behavior" (GET, no body, 2xx-3xx counts as ok, no
+// content assertion), so an existing monitor created before this existed
+// keeps behaving exactly as it always has.
+type httpCheckConfig struct {
+	method             string
+	body               string
+	contentType        string
+	expectedStatuses   []int
+	expectBodyContains string
+}
+
 // probeAttempts is how many times a check is tried before it counts as a
 // failure, and howLongBetween is the pause in between.
 //
@@ -85,7 +101,7 @@ const (
 // probe runs one check, retrying a failure before believing it. The first
 // success wins and carries its own timings; if every attempt fails, the
 // last failure is what gets recorded, since it is the freshest evidence.
-func probe(ctx context.Context, kind, target string) probeResult {
+func probe(ctx context.Context, kind, target string, cfg httpCheckConfig) probeResult {
 	var last probeResult
 	for attempt := 1; attempt <= probeAttempts; attempt++ {
 		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
@@ -93,7 +109,7 @@ func probe(ctx context.Context, kind, target string) probeResult {
 		if kind == "tcp" {
 			res = probeTCP(attemptCtx, target)
 		} else {
-			res = probeHTTP(attemptCtx, target)
+			res = probeHTTP(attemptCtx, target, cfg)
 		}
 		cancel()
 
@@ -120,7 +136,7 @@ func probe(ctx context.Context, kind, target string) probeResult {
 	return last
 }
 
-func probeHTTP(ctx context.Context, target string) probeResult {
+func probeHTTP(ctx context.Context, target string, cfg httpCheckConfig) probeResult {
 	var (
 		connectStart, tlsStart time.Time
 		connectMs, tlsMs       *int
@@ -155,13 +171,29 @@ func probeHTTP(ctx context.Context, target string) probeResult {
 		},
 	}
 
+	method := cfg.method
+	if method == "" {
+		method = http.MethodGet
+	}
+	var bodyReader io.Reader
+	if cfg.body != "" {
+		bodyReader = strings.NewReader(cfg.body)
+	}
+
 	start := time.Now()
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodGet, target, nil)
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), method, target, bodyReader)
 	if err != nil {
 		return probeResult{errorClass: ClassUnknown, errorDetail: err.Error()}
 	}
 
 	req.Header.Set("User-Agent", userAgent)
+	if cfg.body != "" {
+		contentType := cfg.contentType
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		req.Header.Set("Content-Type", contentType)
+	}
 
 	resp, err := probeClient.Do(req)
 	latencyMs := int(time.Since(start).Milliseconds())
@@ -179,9 +211,27 @@ func probeHTTP(ctx context.Context, target string) probeResult {
 		latencyMs: latencyMs, connectMs: connectMs, tlsMs: tlsMs,
 		certExpiry: certExpiry, statusCode: resp.StatusCode,
 	}
-	res.ok, res.errorClass, res.errorDetail = classifyStatus(resp.StatusCode)
+	res.ok, res.errorClass, res.errorDetail = classifyStatus(resp.StatusCode, cfg.expectedStatuses)
+
+	// The body is only worth the bandwidth and memory when there is
+	// something to check it against, and only when the status itself
+	// already passed — a 500 with the right words in its error page is
+	// still a 500, not a content mismatch.
+	if cfg.expectBodyContains != "" && res.ok {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxBodyReadBytes))
+		if !strings.Contains(string(raw), cfg.expectBodyContains) {
+			res.ok = false
+			res.errorClass = ClassContentMismatch
+			res.errorDetail = fmt.Sprintf("beklenen içerik bulunamadı: %q", truncate(cfg.expectBodyContains, 60))
+		}
+	}
 	return res
 }
+
+// maxBodyReadBytes caps how much of a response body is read for a content
+// assertion. A monitor's own page is expected to be small; a check should
+// never buffer an unbounded amount of someone else's response.
+const maxBodyReadBytes = 64 * 1024
 
 func probeTCP(ctx context.Context, target string) probeResult {
 	start := time.Now()
@@ -245,11 +295,25 @@ func classifyError(err error, connected bool) (class, detail string) {
 	return ClassUnknown, trimError(text)
 }
 
-// classifyStatus decides whether a status code counts as up. The range is
-// unchanged from before this file existed; what is new is naming why a code
-// outside it failed, since 503 and 403 send you to completely different
-// places.
-func classifyStatus(code int) (ok bool, class, detail string) {
+// classifyStatus decides whether a status code counts as up. With no
+// expected list, the range is unchanged from before this file existed —
+// what is new is naming why a code outside it failed, since 503 and 403
+// send you to completely different places.
+//
+// When a monitor configures its own expected list, that list replaces the
+// default range entirely rather than adding to it: "expect 404" on a check
+// that's deliberately probing a route that should not exist is a real,
+// common case, and OR-ing it with the default 2xx-3xx would make that
+// impossible to express.
+func classifyStatus(code int, expected []int) (ok bool, class, detail string) {
+	if len(expected) > 0 {
+		for _, want := range expected {
+			if code == want {
+				return true, ClassOK, ""
+			}
+		}
+		return false, ClassHTTPStatus, fmt.Sprintf("beklenen: %s · gelen: %d", joinInts(expected), code)
+	}
 	switch {
 	case code >= 200 && code < 400:
 		return true, ClassOK, ""
@@ -260,6 +324,51 @@ func classifyStatus(code int) (ok bool, class, detail string) {
 	default:
 		return false, ClassHTTPStatus, fmt.Sprintf("beklenmeyen yanıt (HTTP %d)", code)
 	}
+}
+
+// joinInts renders an expected-status list for a message, e.g. [200 302] ->
+// "200,302".
+func joinInts(vals []int) string {
+	var sb strings.Builder
+	for i, v := range vals {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, "%d", v)
+	}
+	return sb.String()
+}
+
+// parseExpectedStatus turns the stored "200,302" form back into a list.
+// Validation already happened at creation time (see api.handleCreateMonitor);
+// this is defense in depth, so an unparsable token is dropped rather than
+// failing the check outright.
+func parseExpectedStatus(raw string) []int {
+	if raw == "" {
+		return nil
+	}
+	var out []int
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var code int
+		if _, err := fmt.Sscanf(part, "%d", &code); err == nil && code >= 100 && code <= 599 {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+// truncate keeps an operator-supplied string (the expected-content
+// substring, echoed back in a failure message) short enough for a chat line
+// even if they configured something long.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 // trimError keeps a raw transport error short enough for a Telegram line
@@ -295,7 +404,7 @@ func causeLabel(class, detail string) string {
 		return "sertifika hatası"
 	case ClassTLSHandshake:
 		return "TLS el sıkışması başarısız"
-	case ClassHTTPServerError, ClassHTTPBlocked, ClassHTTPStatus:
+	case ClassHTTPServerError, ClassHTTPBlocked, ClassHTTPStatus, ClassContentMismatch:
 		return detail
 	}
 	if detail != "" {

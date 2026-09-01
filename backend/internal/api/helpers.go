@@ -30,6 +30,11 @@ var (
 	errInvalidMonitorType        = errors.New("tur 'http' veya 'tcp' olmali")
 	errStatusPageDisabled        = errors.New("durum sayfasi bulunamadi")
 	errMonitorNotFound           = errors.New("izleme bulunamadi")
+	errInvalidMethod             = errors.New("gecersiz HTTP metodu")
+	errCustomFieldsOnTCP         = errors.New("ozel HTTP alanlari (metod/govde/beklenen durum/beklenen icerik) yalnizca 'http' tipi izlemelerde kullanilabilir")
+	errHeadNoBodyAssertion       = errors.New("HEAD istegi govde dondurmez, beklenen icerik ile birlikte kullanilamaz")
+	errInvalidExpectedStatus     = errors.New("beklenen durum kodu 100-599 arasinda, virgulle ayrilmis sayilardan olusmali")
+	errRequestBodyTooLarge       = errors.New("istek govdesi cok buyuk (en fazla 16 KB)")
 )
 
 func parseUnixTime(v string) (time.Time, error) {
