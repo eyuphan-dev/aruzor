@@ -87,19 +87,20 @@ export default function LogsPage() {
               <th className="px-4 py-3 font-medium">{t.logs.columns.time}</th>
               <th className="px-4 py-3 font-medium">{t.logs.columns.email}</th>
               <th className="px-4 py-3 font-medium">{t.logs.columns.event}</th>
+              <th className="px-4 py-3 font-medium">{t.logs.columns.detail}</th>
               <th className="px-4 py-3 font-medium">{t.logs.columns.remote}</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-4 py-4 text-[var(--color-text-muted)]" colSpan={4}>
+                <td className="px-4 py-4 text-[var(--color-text-muted)]" colSpan={5}>
                   {t.dashboard.loading}
                 </td>
               </tr>
             ) : filteredLogs.length === 0 ? (
               <tr>
-                <td className="px-4 py-4 text-[var(--color-text-muted)]" colSpan={4}>
+                <td className="px-4 py-4 text-[var(--color-text-muted)]" colSpan={5}>
                   {t.logs.empty}
                 </td>
               </tr>
@@ -129,6 +130,18 @@ export default function LogsPage() {
                       >
                         {label}
                       </span>
+                    </td>
+                    <td
+                      className="max-w-[260px] px-4 py-2 text-xs text-[var(--color-text-muted)]"
+                      data-label={t.logs.columns.detail}
+                    >
+                      {l.detail ? (
+                        <span className="block truncate font-mono" title={l.detail}>
+                          {l.detail}
+                        </span>
+                      ) : (
+                        "—"
+                      )}
                     </td>
                     <td className="px-4 py-2 text-[var(--color-text-muted)]" data-label={t.logs.columns.remote}>{l.remoteAddr}</td>
                   </tr>

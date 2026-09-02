@@ -2,9 +2,9 @@
 
 import Link from "next/link";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n/context";
-import { listMonitors, createMonitor, deleteMonitor, type Monitor, type MonitorType } from "@/lib/api";
+import { listMonitors, createMonitor, updateMonitor, deleteMonitor, type Monitor, type MonitorType } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { HelpTooltip } from "@/components/HelpTooltip";
 import { useAuth } from "@/lib/auth/context";
@@ -22,12 +22,14 @@ export default function MonitorsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Monitor | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [type, setType] = useState<MonitorType>("http");
   const [target, setTarget] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState("60");
   const [submitting, setSubmitting] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Custom HTTP check — http monitors only, all optional.
   const [method, setMethod] = useState("");
@@ -53,12 +55,39 @@ export default function MonitorsPage() {
     return () => clearInterval(id);
   }, []);
 
+  const resetForm = () => {
+    setName("");
+    setType("http");
+    setTarget("");
+    setIntervalSeconds("60");
+    setMethod("");
+    setRequestBody("");
+    setContentType("");
+    setExpectedStatus("");
+    setExpectBodyContains("");
+    setEditingId(null);
+  };
+
+  const startEdit = (m: Monitor) => {
+    setEditingId(m.id);
+    setName(m.name);
+    setType(m.type);
+    setTarget(m.target);
+    setIntervalSeconds(String(m.intervalSeconds));
+    setMethod(m.method ?? "");
+    setRequestBody(m.requestBody ?? "");
+    setContentType(m.contentType ?? "");
+    setExpectedStatus(m.expectedStatus ?? "");
+    setExpectBodyContains(m.expectBodyContains ?? "");
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await createMonitor({
+      const input = {
         name,
         type,
         target,
@@ -70,14 +99,13 @@ export default function MonitorsPage() {
           expectedStatus: expectedStatus || undefined,
           expectBodyContains: expectBodyContains || undefined,
         }),
-      });
-      setName("");
-      setTarget("");
-      setMethod("");
-      setRequestBody("");
-      setContentType("");
-      setExpectedStatus("");
-      setExpectBodyContains("");
+      };
+      if (editingId) {
+        await updateMonitor(editingId, input);
+      } else {
+        await createMonitor(input);
+      }
+      resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -90,6 +118,7 @@ export default function MonitorsPage() {
     if (!pendingDelete) return;
     try {
       await deleteMonitor(pendingDelete.id);
+      if (editingId === pendingDelete.id) resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -110,10 +139,11 @@ export default function MonitorsPage() {
 
       {canEdit && (
         <form
+          ref={formRef}
           onSubmit={handleSubmit}
           className="flex flex-col gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4"
         >
-          <h2 className="text-sm font-semibold">{t.monitors.addTitle}</h2>
+          <h2 className="text-sm font-semibold">{editingId ? t.monitors.editTitle : t.monitors.addTitle}</h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.monitors.name}</label>
@@ -222,13 +252,24 @@ export default function MonitorsPage() {
             </details>
           )}
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="mt-1 w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
-          >
-            {t.monitors.add}
-          </button>
+          <div className="mt-1 flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+            >
+              {editingId ? t.monitors.saveEdit : t.monitors.add}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="w-fit rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-border)]/30"
+              >
+                {t.dashboard.cancel}
+              </button>
+            )}
+          </div>
         </form>
       )}
 
@@ -299,12 +340,20 @@ export default function MonitorsPage() {
                   </td>
                   <td className="px-4 py-2" data-label={t.monitors.columns.actions}>
                     {canEdit ? (
-                      <button
-                        onClick={() => setPendingDelete(m)}
-                        className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
-                      >
-                        {t.monitors.delete}
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => startEdit(m)}
+                          className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-border)]/30"
+                        >
+                          {t.monitors.edit}
+                        </button>
+                        <button
+                          onClick={() => setPendingDelete(m)}
+                          className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10"
+                        >
+                          {t.monitors.delete}
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-xs text-[var(--color-text-muted)]">—</span>
                     )}

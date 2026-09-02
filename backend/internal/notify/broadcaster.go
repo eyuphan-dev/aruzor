@@ -56,6 +56,36 @@ func (b *Broadcaster) SendAlert(ctx context.Context, text string) error {
 	return nil
 }
 
+// TestResult is one channel's outcome from SendTest.
+type TestResult struct {
+	Channel string `json:"channel"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
+}
+
+// SendTest sends one message through every configured channel and reports
+// each one's own outcome, unlike SendAlert which fires-and-forgets and only
+// logs failures. A settings page "send test notification" button exists
+// specifically so a wrong webhook URL is caught the moment it is typed
+// rather than the next time a real alert happens to fire — that only works
+// if the button can say which channel failed and why.
+func (b *Broadcaster) SendTest(ctx context.Context, text string) []TestResult {
+	if len(b.channels) == 0 {
+		return []TestResult{}
+	}
+	out := make([]TestResult, 0, len(b.channels))
+	for _, ch := range b.channels {
+		res := TestResult{Channel: channelName(ch)}
+		if err := ch.SendAlert(ctx, text); err != nil {
+			res.Error = err.Error()
+		} else {
+			res.OK = true
+		}
+		out = append(out, res)
+	}
+	return out
+}
+
 func (b *Broadcaster) SendDailyDigest(ctx context.Context) error {
 	for _, ch := range b.channels {
 		dc, ok := ch.(DigestChannel)

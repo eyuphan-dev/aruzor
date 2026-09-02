@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"aruzor/internal/auth"
+	"aruzor/internal/notify"
 	"aruzor/internal/prometheus"
 	"aruzor/internal/store"
 )
@@ -39,6 +40,12 @@ type Router struct {
 	// advice.
 	trafficPaths []string
 
+	// nil when no notification channel is configured at all. Used only by
+	// the settings page's "send test notification" button — every other
+	// caller (the alert engine, the uptime checker) already got its own
+	// reference to this same broadcaster at startup.
+	broadcaster *notify.Broadcaster
+
 	dsClientsMu sync.Mutex
 	dsClients   map[string]*dsClientEntry // datasource id -> cached client
 }
@@ -48,7 +55,7 @@ type dsClientEntry struct {
 	client *prometheus.Client
 }
 
-func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssuer, log *slog.Logger, allowedOrigin, vapidPublicKey string, trafficPaths []string) http.Handler {
+func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssuer, log *slog.Logger, allowedOrigin, vapidPublicKey string, trafficPaths []string, broadcaster *notify.Broadcaster) http.Handler {
 	r := &Router{
 		mux:               http.NewServeMux(),
 		db:                db,
@@ -60,6 +67,7 @@ func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssue
 		statusPageLimiter: newLoginLimiter(30, time.Minute),
 		vapidPublicKey:    vapidPublicKey,
 		trafficPaths:      trafficPaths,
+		broadcaster:       broadcaster,
 		dsClients:         make(map[string]*dsClientEntry),
 	}
 	r.routes()
@@ -171,7 +179,7 @@ func (r *Router) logForbidden(req *http.Request, claims *auth.Claims, requiredRo
 		userID = &claims.UserID
 	}
 	r.log.Warn("yetersiz rol", "path", req.URL.Path, "gerekli_rol", requiredRole, "email", email)
-	r.audit(req.Context(), userID, email, "forbidden_attempt", req.RemoteAddr)
+	r.audit(req.Context(), userID, email, "forbidden_attempt", "", req.RemoteAddr)
 }
 
 func (r *Router) routes() {
@@ -202,6 +210,7 @@ func (r *Router) routes() {
 	// datasource in the query builder).
 	r.mux.HandleFunc("GET /api/v1/datasources", r.requireAuth(r.handleListDatasources))
 	r.mux.HandleFunc("POST /api/v1/datasources", r.requireMinRole("admin", r.handleCreateDatasource))
+	r.mux.HandleFunc("PATCH /api/v1/datasources/{id}", r.requireMinRole("admin", r.handleUpdateDatasource))
 	r.mux.HandleFunc("DELETE /api/v1/datasources/{id}", r.requireMinRole("admin", r.handleDeleteDatasource))
 
 	// Monitors point the backend at an arbitrary HTTP/TCP target it will
@@ -209,6 +218,7 @@ func (r *Router) routes() {
 	// only admin+ may manage them, any authenticated role may view.
 	r.mux.HandleFunc("GET /api/v1/monitors", r.requireAuth(r.handleListMonitors))
 	r.mux.HandleFunc("POST /api/v1/monitors", r.requireMinRole("admin", r.handleCreateMonitor))
+	r.mux.HandleFunc("PATCH /api/v1/monitors/{id}", r.requireMinRole("admin", r.handleUpdateMonitor))
 	r.mux.HandleFunc("GET /api/v1/monitors/{id}/checks", r.requireAuth(r.handleMonitorChecks))
 	r.mux.HandleFunc("DELETE /api/v1/monitors/{id}", r.requireMinRole("admin", r.handleDeleteMonitor))
 	r.mux.HandleFunc("POST /api/v1/monitors/{id}/snooze", r.requireMinRole("editor", r.handleSnoozeMonitor))
@@ -261,10 +271,17 @@ func (r *Router) routes() {
 
 	r.mux.HandleFunc("GET /api/v1/users", r.requireRole(RoleSuperAdmin, r.handleListUsers))
 	r.mux.HandleFunc("POST /api/v1/users", r.requireRole(RoleSuperAdmin, r.handleCreateUser))
+	r.mux.HandleFunc("PATCH /api/v1/users/{id}", r.requireRole(RoleSuperAdmin, r.handleUpdateUser))
 	r.mux.HandleFunc("DELETE /api/v1/users/{id}", r.requireRole(RoleSuperAdmin, r.handleDeleteUser))
 
 	r.mux.HandleFunc("GET /api/v1/settings", r.requireRole(RoleSuperAdmin, r.handleListSettings))
 	r.mux.HandleFunc("PUT /api/v1/settings/{key}", r.requireRole(RoleSuperAdmin, r.handleUpdateSetting))
+
+	// Lets the settings page confirm a channel actually works the moment
+	// it's configured, instead of finding out only when a real alert next
+	// fires. super_admin-only: it sends a real message through every
+	// configured channel, the same privilege level that can configure them.
+	r.mux.HandleFunc("POST /api/v1/notify/test", r.requireRole(RoleSuperAdmin, r.handleTestNotification))
 }
 
 // withQueryRateLimit caps how often a single authenticated user may hit the
@@ -321,7 +338,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 		r.log.Warn("giris denemesi hiz siniri asildi", "remote", req.RemoteAddr)
 		// Repeated failed attempts hitting the rate limit is a brute-force
 		// signal worth surfacing to super_admin, not just the server log.
-		r.audit(req.Context(), nil, "", "login_rate_limited", req.RemoteAddr)
+		r.audit(req.Context(), nil, "", "login_rate_limited", "", req.RemoteAddr)
 		writeError(w, http.StatusTooManyRequests, errTooManyAttempts)
 		return
 	}
@@ -340,7 +357,7 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	}
 	if user == nil || !auth.VerifyPassword(user.PasswordHash, body.Password) {
 		r.log.Warn("basarisiz giris denemesi", "email", body.Email, "remote", req.RemoteAddr)
-		r.audit(req.Context(), nil, body.Email, "login_failed", req.RemoteAddr)
+		r.audit(req.Context(), nil, body.Email, "login_failed", "", req.RemoteAddr)
 		writeError(w, http.StatusUnauthorized, errInvalidCredentials)
 		return
 	}
@@ -361,19 +378,38 @@ func (r *Router) handleLogin(w http.ResponseWriter, req *http.Request) {
 	if statErr != nil {
 		r.log.Error("giris istatistigi alinamadi", "hata", statErr.Error())
 	} else if total > 0 && fromThisAddr == 0 {
-		r.audit(req.Context(), &user.ID, user.Email, "login_new_ip", req.RemoteAddr)
+		r.audit(req.Context(), &user.ID, user.Email, "login_new_ip", "", req.RemoteAddr)
 	}
 
-	r.audit(req.Context(), &user.ID, user.Email, "login_success", req.RemoteAddr)
+	r.audit(req.Context(), &user.ID, user.Email, "login_success", "", req.RemoteAddr)
 	writeJSON(w, http.StatusOK, loginResponse{Token: token, UserID: user.ID, Email: user.Email, Role: user.Role})
 }
 
 // audit persists a security-relevant event; failures are only logged, never
 // returned to the caller, since audit logging must not block the request.
-func (r *Router) audit(ctx context.Context, userID *string, email, event, remoteAddr string) {
-	if err := r.db.InsertAuditLog(ctx, uuid.NewString(), userID, email, event, remoteAddr); err != nil {
+func (r *Router) audit(ctx context.Context, userID *string, email, event, detail, remoteAddr string) {
+	if err := r.db.InsertAuditLog(ctx, uuid.NewString(), userID, email, event, detail, remoteAddr); err != nil {
 		r.log.Error("audit log yazilamadi", "hata", err.Error())
 	}
+}
+
+// auditFromClaims records an admin-privileged action (creating, editing or
+// deleting a datasource/monitor/alert/user, or changing a setting) against
+// whoever the request's own token identifies, from the request's own remote
+// address. Every route this is called from already ran through requireAuth
+// or requireMinRole, so claims is never nil here.
+//
+// This is the half of the audit trail that was missing: login attempts were
+// already recorded, but nothing said who created a datasource pointing at
+// an internal address, or who deleted a user — exactly the actions the
+// SSRF-shaped trust boundary comments throughout this package rely on being
+// admin-only for safety, with no record of who exercised that privilege.
+func (r *Router) auditFromClaims(req *http.Request, event, detail string) {
+	claims := claimsFromContext(req.Context())
+	if claims == nil {
+		return
+	}
+	r.audit(req.Context(), &claims.UserID, claims.Email, event, detail, req.RemoteAddr)
 }
 
 type deleteLogsRequest struct {

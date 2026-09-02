@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -19,6 +20,16 @@ type createAlertRequest struct {
 	Threshold float64 `json:"threshold"`
 }
 
+func validateAlertFields(name, promql, operator string) error {
+	if name == "" || promql == "" {
+		return errInvalidBody
+	}
+	if !validOperators[operator] {
+		return errInvalidOperator
+	}
+	return nil
+}
+
 func (r *Router) handleListAlerts(w http.ResponseWriter, req *http.Request) {
 	rules, err := r.db.ListAlertRules(req.Context())
 	if err != nil {
@@ -35,12 +46,8 @@ func (r *Router) handleCreateAlert(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidBody)
 		return
 	}
-	if body.Name == "" || body.PromQL == "" {
-		writeError(w, http.StatusBadRequest, errInvalidBody)
-		return
-	}
-	if !validOperators[body.Operator] {
-		writeError(w, http.StatusBadRequest, errInvalidOperator)
+	if err := validateAlertFields(body.Name, body.PromQL, body.Operator); err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -50,7 +57,6 @@ func (r *Router) handleCreateAlert(w http.ResponseWriter, req *http.Request) {
 		PromQL:    body.PromQL,
 		Operator:  body.Operator,
 		Threshold: body.Threshold,
-		Channel:   "telegram",
 		Enabled:   true,
 		LastState: "ok",
 		CreatedAt: time.Now(),
@@ -60,11 +66,21 @@ func (r *Router) handleCreateAlert(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
+	r.auditFromClaims(req, "alert_created", rule.Name)
 	writeJSON(w, http.StatusCreated, rule)
 }
 
+// updateAlertRequest covers two independent things through one endpoint:
+// flipping Enabled (what the toggle switch on the list does) and editing the
+// rule's definition (what an actual edit form does). Either can be sent
+// alone or together — a bare {"enabled": false} keeps working exactly as it
+// did before the rule became editable.
 type updateAlertRequest struct {
-	Enabled *bool `json:"enabled"`
+	Enabled   *bool    `json:"enabled,omitempty"`
+	Name      *string  `json:"name,omitempty"`
+	PromQL    *string  `json:"promql,omitempty"`
+	Operator  *string  `json:"operator,omitempty"`
+	Threshold *float64 `json:"threshold,omitempty"`
 }
 
 func (r *Router) handleUpdateAlert(w http.ResponseWriter, req *http.Request) {
@@ -74,25 +90,86 @@ func (r *Router) handleUpdateAlert(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, errInvalidBody)
 		return
 	}
-	if body.Enabled == nil {
+
+	editsDefinition := body.Name != nil || body.PromQL != nil || body.Operator != nil || body.Threshold != nil
+	if body.Enabled == nil && !editsDefinition {
 		writeError(w, http.StatusBadRequest, errInvalidBody)
 		return
 	}
-	if err := r.db.SetAlertRuleEnabled(req.Context(), id, *body.Enabled); err != nil {
-		r.log.Error("alarm guncellenemedi", "hata", err.Error())
-		writeError(w, http.StatusInternalServerError, errInternal)
-		return
+
+	if body.Enabled != nil {
+		if err := r.db.SetAlertRuleEnabled(req.Context(), id, *body.Enabled); err != nil {
+			r.log.Error("alarm guncellenemedi", "hata", err.Error())
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return
+		}
 	}
+
+	if editsDefinition {
+		// A partial edit (only the threshold changed, say) is filled in
+		// from the rule's current values rather than requiring the client
+		// to resend fields it isn't touching.
+		current, err := r.findAlertRule(req.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, errAlertNotFound)
+			return
+		}
+		name, promql, operator, threshold := current.Name, current.PromQL, current.Operator, current.Threshold
+		if body.Name != nil {
+			name = *body.Name
+		}
+		if body.PromQL != nil {
+			promql = *body.PromQL
+		}
+		if body.Operator != nil {
+			operator = *body.Operator
+		}
+		if body.Threshold != nil {
+			threshold = *body.Threshold
+		}
+		if err := validateAlertFields(name, promql, operator); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := r.db.UpdateAlertRule(req.Context(), id, name, promql, operator, threshold); err != nil {
+			r.log.Error("alarm duzenlenemedi", "hata", err.Error())
+			writeError(w, http.StatusInternalServerError, errInternal)
+			return
+		}
+		r.auditFromClaims(req, "alert_updated", name)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// findAlertRule is a small linear lookup rather than a new store method: the
+// rule list is never large enough (dozens, not millions) for this to matter,
+// and it saves adding a GetAlertRule(id) query used from exactly one place.
+func (r *Router) findAlertRule(ctx context.Context, id string) (store.AlertRule, error) {
+	rules, err := r.db.ListAlertRules(ctx)
+	if err != nil {
+		return store.AlertRule{}, err
+	}
+	for _, rule := range rules {
+		if rule.ID == id {
+			return rule, nil
+		}
+	}
+	return store.AlertRule{}, errAlertNotFound
 }
 
 func (r *Router) handleDeleteAlert(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
+	name := id
+	if rule, err := r.findAlertRule(req.Context(), id); err == nil {
+		name = rule.Name
+	}
 	if err := r.db.DeleteAlertRule(req.Context(), id); err != nil {
 		r.log.Error("alarm silinemedi", "hata", err.Error())
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
+	r.auditFromClaims(req, "alert_deleted", name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

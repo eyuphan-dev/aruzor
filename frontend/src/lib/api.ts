@@ -24,6 +24,7 @@ export type AuditLog = {
   userId?: string;
   email: string;
   event: string;
+  detail?: string;
   remoteAddr: string;
   createdAt: string;
 };
@@ -172,7 +173,6 @@ export type AlertRule = {
   promql: string;
   operator: AlertOperator;
   threshold: number;
-  channel: string;
   enabled: boolean;
   lastState: "ok" | "firing";
   lastNotifiedAt?: string;
@@ -205,6 +205,16 @@ export function setAlertRuleEnabled(id: string, enabled: boolean) {
   return apiRequest<{ status: string }>(`/api/v1/alerts/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ enabled }),
+  });
+}
+
+export function updateAlertRule(
+  id: string,
+  input: { name: string; promql: string; operator: AlertOperator; threshold: number },
+) {
+  return apiRequest<{ status: string }>(`/api/v1/alerts/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
   });
 }
 
@@ -244,6 +254,20 @@ export function createUser(input: { email: string; password: string; role: AppRo
   return apiRequest<{ id: string; email: string; role: AppRole }>("/api/v1/users", {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function updateUserRole(id: string, role: AppRole) {
+  return apiRequest<{ status: string }>(`/api/v1/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+export function resetUserPassword(id: string, password: string) {
+  return apiRequest<{ status: string }>(`/api/v1/users/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ password }),
   });
 }
 
@@ -348,6 +372,13 @@ export function listDatasources() {
 export function createDatasource(input: { name: string; url: string; type?: string }) {
   return apiRequest<Datasource>("/api/v1/datasources", {
     method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateDatasource(id: string, input: { name: string; url: string }) {
+  return apiRequest<{ status: string }>(`/api/v1/datasources/${id}`, {
+    method: "PATCH",
     body: JSON.stringify(input),
   });
 }
@@ -468,7 +499,7 @@ export function listMonitors() {
   return apiRequest<Monitor[]>("/api/v1/monitors");
 }
 
-export function createMonitor(input: {
+export type MonitorInput = {
   name: string;
   type: MonitorType;
   target: string;
@@ -478,9 +509,18 @@ export function createMonitor(input: {
   contentType?: string;
   expectedStatus?: string;
   expectBodyContains?: string;
-}) {
+};
+
+export function createMonitor(input: MonitorInput) {
   return apiRequest<Monitor>("/api/v1/monitors", {
     method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateMonitor(id: string, input: MonitorInput) {
+  return apiRequest<Monitor>(`/api/v1/monitors/${id}`, {
+    method: "PATCH",
     body: JSON.stringify(input),
   });
 }
@@ -524,6 +564,12 @@ export function updateSettingValue(key: string, value: string) {
 }
 
 // --- Browser push notifications -------------------------------------------
+
+export type NotificationTestResult = { channel: string; ok: boolean; error?: string };
+
+export function sendTestNotification() {
+  return apiRequest<NotificationTestResult[]>("/api/v1/notify/test", { method: "POST" });
+}
 
 export function getPushVapidKey() {
   return apiRequest<{ publicKey: string }>("/api/v1/push/vapid-key");

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -123,8 +124,15 @@ func (r *Router) handleCreateMonitor(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if body.IntervalSeconds < 15 || body.IntervalSeconds > 3600 {
+	if body.IntervalSeconds == 0 {
 		body.IntervalSeconds = 60
+	} else if body.IntervalSeconds < 15 || body.IntervalSeconds > 3600 {
+		// Rejected rather than silently clamped to 60 — a value that far out
+		// of range is more likely a typo (450000 meant to be 45) than a
+		// deliberate choice, and clamping it would save something the user
+		// never actually asked for without telling them.
+		writeError(w, http.StatusBadRequest, errIntervalOutOfRange)
+		return
 	}
 
 	m := store.Monitor{
@@ -145,16 +153,89 @@ func (r *Router) handleCreateMonitor(w http.ResponseWriter, req *http.Request) {
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
+	r.auditFromClaims(req, "monitor_created", m.Name+" -> "+m.Target)
 	writeJSON(w, http.StatusCreated, m)
+}
+
+// updateMonitorRequest mirrors createMonitorRequest exactly. An edit is a
+// full replacement of the monitor's definition rather than a sparse patch:
+// the create-time validation (validateCustomCheckFields, the interval
+// range) already has to run against the complete, final shape, and a
+// partial-patch endpoint would need to reconstruct that shape from the
+// stored row anyway before it could validate it. Sending the whole form
+// back is what the edit UI already has in hand.
+type updateMonitorRequest = createMonitorRequest
+
+func (r *Router) findMonitor(ctx context.Context, id string) (store.Monitor, error) {
+	monitors, err := r.db.ListMonitors(ctx)
+	if err != nil {
+		return store.Monitor{}, err
+	}
+	for _, m := range monitors {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return store.Monitor{}, errMonitorNotFound
+}
+
+func (r *Router) handleUpdateMonitor(w http.ResponseWriter, req *http.Request) {
+	id := req.PathValue("id")
+	var body updateMonitorRequest
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Name == "" || body.Target == "" {
+		writeError(w, http.StatusBadRequest, errInvalidBody)
+		return
+	}
+	if !validMonitorTypes[body.Type] {
+		writeError(w, http.StatusBadRequest, errInvalidMonitorType)
+		return
+	}
+	if err := validateCustomCheckFields(body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.IntervalSeconds < 15 || body.IntervalSeconds > 3600 {
+		writeError(w, http.StatusBadRequest, errIntervalOutOfRange)
+		return
+	}
+	if _, err := r.findMonitor(req.Context(), id); err != nil {
+		writeError(w, http.StatusNotFound, errMonitorNotFound)
+		return
+	}
+
+	m := store.Monitor{
+		ID:                 id,
+		Name:               body.Name,
+		Type:               body.Type,
+		Target:             body.Target,
+		IntervalSeconds:    body.IntervalSeconds,
+		Method:             body.Method,
+		RequestBody:        body.RequestBody,
+		ContentType:        body.ContentType,
+		ExpectedStatus:     body.ExpectedStatus,
+		ExpectBodyContains: body.ExpectBodyContains,
+	}
+	if err := r.db.UpdateMonitor(req.Context(), m); err != nil {
+		r.log.Error("izleme duzenlenemedi", "hata", err.Error())
+		writeError(w, http.StatusInternalServerError, errInternal)
+		return
+	}
+	r.auditFromClaims(req, "monitor_updated", m.Name+" -> "+m.Target)
+	writeJSON(w, http.StatusOK, m)
 }
 
 func (r *Router) handleDeleteMonitor(w http.ResponseWriter, req *http.Request) {
 	id := req.PathValue("id")
+	name := id
+	if m, err := r.findMonitor(req.Context(), id); err == nil {
+		name = m.Name
+	}
 	if err := r.db.DeleteMonitor(req.Context(), id); err != nil {
 		r.log.Error("izleme silinemedi", "hata", err.Error())
 		writeError(w, http.StatusInternalServerError, errInternal)
 		return
 	}
+	r.auditFromClaims(req, "monitor_deleted", name)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

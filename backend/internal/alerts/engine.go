@@ -16,6 +16,23 @@ import (
 	"aruzor/internal/store"
 )
 
+// firingDebounce is how long a rule's condition has to stay breached before
+// it is reported as firing.
+//
+// The uptime checker treats a single failed request as a stall, not an
+// outage, and only pages the chat once the target has stayed unreachable
+// for a sustained window — a design explained at length next to that
+// checker's own threshold. This engine used to skip that discipline
+// entirely: one Prometheus sample above a threshold was enough to send
+// "🚨 ALARM" immediately, and the next sample dipping back below it sent
+// "✅ Düzeldi" just as fast. A metric hovering near its threshold could fire
+// and resolve on every single evaluation tick.
+//
+// Recovery is not debounced the same way: once a rule is genuinely firing,
+// reporting that it recovered is good news worth sending as soon as it is
+// true, the same asymmetry the uptime checker already applies.
+const firingDebounce = 3 * time.Minute
+
 type Notifier interface {
 	SendAlert(ctx context.Context, text string) error
 	SendDailyDigest(ctx context.Context) error
@@ -134,45 +151,115 @@ func (e *Engine) evaluateRules(ctx context.Context) {
 	e.sendBatch(ctx, messages)
 }
 
+// ruleInput is what decideRuleTransition needs, kept free of the database
+// and the Prometheus client so the debounce policy can be tested directly
+// against wall-clock scenarios instead of waiting on real ticks.
+type ruleInput struct {
+	lastState    string
+	pendingState string
+	pendingSince *time.Time
+	firing       bool
+	now          time.Time
+}
+
+// ruleTransition is what changed and what to persist. commit is false while
+// a breach is still inside the debounce window — pendingState/pendingSince
+// are written so the countdown survives a restart, but lastState and the
+// history table are not touched yet.
+type ruleTransition struct {
+	commit       bool
+	newState     string
+	pendingState string
+	pendingSince *time.Time
+	notify       bool
+}
+
+// decideRuleTransition is the whole debounce policy, kept pure so it can be
+// tested directly: given the rule's last committed state, what it is
+// currently pending on, and whether the condition is breached right now,
+// what should be written and reported.
+func decideRuleTransition(in ruleInput) ruleTransition {
+	candidate := "ok"
+	if in.firing {
+		candidate = "firing"
+	}
+
+	if candidate == in.lastState {
+		// Back to (or still at) the committed state — any pending breach in
+		// the other direction is stale and forgotten rather than left to
+		// resume counting from an old timestamp on a later flap.
+		if in.pendingState != "" {
+			return ruleTransition{commit: false, pendingState: "", pendingSince: nil}
+		}
+		return ruleTransition{}
+	}
+
+	// Recovery is reported the moment it is true — see firingDebounce's
+	// comment for why firing and resolving are treated asymmetrically.
+	if candidate == "ok" {
+		return ruleTransition{commit: true, newState: "ok", notify: true}
+	}
+
+	// A new breach, or a breach already being timed: start (or keep) the
+	// clock, and only commit once it has run long enough.
+	since := in.pendingSince
+	if in.pendingState != candidate || since == nil {
+		since = &in.now
+	}
+	if in.now.Sub(*since) < firingDebounce {
+		return ruleTransition{commit: false, pendingState: candidate, pendingSince: since}
+	}
+	return ruleTransition{commit: true, newState: "firing", notify: true}
+}
+
 // evaluateRule returns the notification text for this rule's transition (if
-// any occurred and it isn't snoozed), or "" if nothing should be sent.
+// any occurred, was actually committed, and isn't snoozed), or "" otherwise.
 func (e *Engine) evaluateRule(ctx context.Context, rule store.AlertRule) string {
 	value, ok := e.queryValue(ctx, rule.PromQL)
 	if !ok {
 		return ""
 	}
 
-	firing := compare(value, rule.Operator, rule.Threshold)
-	newState := "ok"
-	if firing {
-		newState = "firing"
-	}
+	t := decideRuleTransition(ruleInput{
+		lastState:    rule.LastState,
+		pendingState: rule.PendingState,
+		pendingSince: rule.PendingSince,
+		firing:       compare(value, rule.Operator, rule.Threshold),
+		now:          time.Now(),
+	})
 
-	if newState == rule.LastState {
+	if !t.commit {
+		if t.pendingState != rule.PendingState {
+			if err := e.db.SetAlertRulePending(ctx, rule.ID, t.pendingState, t.pendingSince); err != nil {
+				e.log.Error("alarm bekleme durumu kaydedilemedi", "hata", err.Error())
+			}
+		}
 		return ""
 	}
 
-	if err := e.db.UpdateAlertRuleState(ctx, rule.ID, newState, time.Now()); err != nil {
+	if err := e.db.UpdateAlertRuleState(ctx, rule.ID, t.newState, time.Now()); err != nil {
 		e.log.Error("alarm durumu guncellenemedi", "hata", err.Error())
 		return ""
 	}
 
 	event := "resolved"
-	if newState == "firing" {
+	if t.newState == "firing" {
 		event = "fired"
 	}
 	if err := e.db.InsertAlertEvent(ctx, uuid.NewString(), rule.ID, rule.Name, event, value); err != nil {
 		e.log.Error("alarm gecmisi kaydedilemedi", "hata", err.Error())
 	}
 
-	e.log.Info("alarm durumu degisti", "kural", rule.Name, "eski", rule.LastState, "yeni", newState, "deger", value)
+	e.log.Info("alarm durumu degisti", "kural", rule.Name, "eski", rule.LastState, "yeni", t.newState, "deger", value)
 
-	if rule.SnoozedUntil != nil && rule.SnoozedUntil.After(time.Now()) {
-		e.log.Info("alarm susturulmus, bildirim atlandi", "kural", rule.Name, "susturma_bitis", rule.SnoozedUntil)
+	if !t.notify || (rule.SnoozedUntil != nil && rule.SnoozedUntil.After(time.Now())) {
+		if rule.SnoozedUntil != nil && rule.SnoozedUntil.After(time.Now()) {
+			e.log.Info("alarm susturulmus, bildirim atlandi", "kural", rule.Name, "susturma_bitis", rule.SnoozedUntil)
+		}
 		return ""
 	}
 
-	return formatAlertMessage(rule, newState, value)
+	return formatAlertMessage(rule, t.newState, value)
 }
 
 // sendBatch sends a single message for one transition (unchanged format

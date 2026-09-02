@@ -82,5 +82,21 @@ func (r *Router) handleUpdateSetting(w http.ResponseWriter, req *http.Request) {
 
 	claims := claimsFromContext(req.Context())
 	r.log.Info("ayar degistirildi", "kim", claims.Email, "ayar", key, "deger", body.Value)
+	r.auditFromClaims(req, "setting_changed", key+" = "+body.Value)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleTestNotification sends one message through every configured
+// channel so a wrong webhook URL, or Telegram never having been added to
+// its group, is caught the moment it is set up rather than the next time a
+// real alert happens to fire.
+func (r *Router) handleTestNotification(w http.ResponseWriter, req *http.Request) {
+	if r.broadcaster == nil {
+		writeJSON(w, http.StatusOK, []struct{}{})
+		return
+	}
+	claims := claimsFromContext(req.Context())
+	text := "🔔 Aruzor test bildirimi — " + claims.Email + " tarafından gönderildi. Bu kanal çalışıyor."
+	results := r.broadcaster.SendTest(req.Context(), text)
+	writeJSON(w, http.StatusOK, results)
 }

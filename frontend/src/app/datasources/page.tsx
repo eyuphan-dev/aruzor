@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n/context";
-import { listDatasources, createDatasource, deleteDatasource, type Datasource } from "@/lib/api";
+import { listDatasources, createDatasource, updateDatasource, deleteDatasource, type Datasource } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { HelpTooltip } from "@/components/HelpTooltip";
 import { useAuth } from "@/lib/auth/context";
@@ -16,6 +16,8 @@ export default function DatasourcesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<Datasource | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -32,14 +34,30 @@ export default function DatasourcesPage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(refresh, []);
 
+  const resetForm = () => {
+    setName("");
+    setUrl("");
+    setEditingId(null);
+  };
+
+  const startEdit = (ds: Datasource) => {
+    setEditingId(ds.id);
+    setName(ds.name);
+    setUrl(ds.url);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await createDatasource({ name, url });
-      setName("");
-      setUrl("");
+      if (editingId) {
+        await updateDatasource(editingId, { name, url });
+      } else {
+        await createDatasource({ name, url });
+      }
+      resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -52,6 +70,7 @@ export default function DatasourcesPage() {
     if (!pendingDelete) return;
     try {
       await deleteDatasource(pendingDelete.id);
+      if (editingId === pendingDelete.id) resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -72,10 +91,11 @@ export default function DatasourcesPage() {
 
       {canEdit && (
       <form
+        ref={formRef}
         onSubmit={handleSubmit}
         className="flex flex-col gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4"
       >
-        <h2 className="text-sm font-semibold">{t.datasources.addTitle}</h2>
+        <h2 className="text-sm font-semibold">{editingId ? t.datasources.editTitle : t.datasources.addTitle}</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1">
             <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.datasources.name}</label>
@@ -98,13 +118,24 @@ export default function DatasourcesPage() {
             />
           </div>
         </div>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="mt-1 w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
-        >
-          {t.datasources.add}
-        </button>
+        <div className="mt-1 flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+          >
+            {editingId ? t.datasources.saveEdit : t.datasources.add}
+          </button>
+          {editingId && (
+            <button
+              type="button"
+              onClick={resetForm}
+              className="w-fit rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-border)]/30"
+            >
+              {t.dashboard.cancel}
+            </button>
+          )}
+        </div>
       </form>
       )}
 
@@ -152,14 +183,22 @@ export default function DatasourcesPage() {
                     <td className="px-4 py-2 text-[var(--color-text-muted)]" data-label={t.datasources.columns.type}>{ds.type}</td>
                     <td className="px-4 py-2" data-label={t.datasources.columns.actions}>
                       {canEdit ? (
-                        <button
-                          onClick={() => setPendingDelete(ds)}
-                          disabled={isDefault}
-                          title={isDefault ? t.datasources.cannotDeleteDefault : undefined}
-                          className="min-h-9 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          {t.datasources.delete}
-                        </button>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => startEdit(ds)}
+                            className="min-h-9 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-border)]/30"
+                          >
+                            {t.datasources.edit}
+                          </button>
+                          <button
+                            onClick={() => setPendingDelete(ds)}
+                            disabled={isDefault}
+                            title={isDefault ? t.datasources.cannotDeleteDefault : undefined}
+                            className="min-h-9 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {t.datasources.delete}
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-xs text-[var(--color-text-muted)]">—</span>
                       )}

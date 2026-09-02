@@ -91,15 +91,17 @@ func main() {
 		logger.Info("erisim logu bulunamadi, trafik analizi kapali; ARUZOR_ACCESS_LOG_PATHS ile yol tanimlanabilir")
 	}
 
-	router := api.NewRouter(db, promClient, tokens, logger, corsOrigin, vapidPub, trafficPaths)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// One broadcaster feeds both the alert engine and the uptime checker, so
 	// every channel (Telegram, browser push, the operator's webhook) hears
-	// about a threshold breach and a service outage the same way.
+	// about a threshold breach and a service outage the same way. Built
+	// before the router so the router can hand it to the settings page's
+	// "send test notification" endpoint too.
 	broadcaster := startAlertEngine(ctx, db, promClient, logger, vapidPub, vapidPriv)
+	router := api.NewRouter(db, promClient, tokens, logger, corsOrigin, vapidPub, trafficPaths, broadcaster)
+
 	go uptime.NewChecker(db, broadcaster, logger).Run(ctx)
 	if collector != nil {
 		go collector.Run(ctx)

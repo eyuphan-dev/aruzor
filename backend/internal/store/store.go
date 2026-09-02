@@ -119,31 +119,63 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	return users, rows.Err()
 }
 
+// CountSuperAdmins is used to keep the instance from ever being left with
+// none: demoting or deleting the last super_admin would lock everyone out
+// of user management, settings and the audit log at once, with no
+// registration flow to recover through.
+func (s *Store) CountSuperAdmins(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = 'super_admin'`).Scan(&count)
+	return count, err
+}
+
+// UpdateUserRole changes a user's role. Password and email are untouched.
+func (s *Store) UpdateUserRole(ctx context.Context, id, role string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, id)
+	return err
+}
+
+// UpdateUserPassword resets a user's password. There is no self-service
+// "forgot password" flow (no email is ever sent by this app), so a
+// super_admin doing this on someone's behalf is the only recovery path —
+// this is what makes that possible without deleting and recreating the
+// account, which would have discarded its id and audit trail.
+func (s *Store) UpdateUserPassword(ctx context.Context, id, passwordHash string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, id)
+	return err
+}
+
 func (s *Store) DeleteUser(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	return err
 }
 
 type AuditLog struct {
-	ID         string    `json:"id"`
-	UserID     *string   `json:"userId,omitempty"`
-	Email      string    `json:"email"`
-	Event      string    `json:"event"`
+	ID     string  `json:"id"`
+	UserID *string `json:"userId,omitempty"`
+	Email  string  `json:"email"`
+	Event  string  `json:"event"`
+	// Detail names which resource the event happened to — a datasource URL,
+	// a monitor's target, a renamed alert rule — since "an admin created a
+	// datasource" is not enough to answer "which one, pointed at what
+	// address" when that is exactly the question a security review asks.
+	// Empty for events that don't act on a named resource (login, etc).
+	Detail     string    `json:"detail,omitempty"`
 	RemoteAddr string    `json:"remoteAddr"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
 
-func (s *Store) InsertAuditLog(ctx context.Context, id string, userID *string, email, event, remoteAddr string) error {
+func (s *Store) InsertAuditLog(ctx context.Context, id string, userID *string, email, event, detail, remoteAddr string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO audit_logs (id, user_id, email, event, remote_addr) VALUES (?, ?, ?, ?, ?)`,
-		id, userID, email, event, remoteAddr,
+		`INSERT INTO audit_logs (id, user_id, email, event, detail, remote_addr) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, userID, email, event, detail, remoteAddr,
 	)
 	return err
 }
 
 func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_id, email, event, remote_addr, created_at FROM audit_logs ORDER BY created_at DESC LIMIT ?`,
+		`SELECT id, user_id, email, event, detail, remote_addr, created_at FROM audit_logs ORDER BY created_at DESC LIMIT ?`,
 		limit,
 	)
 	if err != nil {
@@ -155,7 +187,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error
 	for rows.Next() {
 		var l AuditLog
 		var userID sql.NullString
-		if err := rows.Scan(&l.ID, &userID, &l.Email, &l.Event, &l.RemoteAddr, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &userID, &l.Email, &l.Event, &l.Detail, &l.RemoteAddr, &l.CreatedAt); err != nil {
 			return nil, err
 		}
 		if userID.Valid {
@@ -164,6 +196,18 @@ func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]AuditLog, error
 		logs = append(logs, l)
 	}
 	return logs, rows.Err()
+}
+
+// PruneAuditLogs deletes entries older than the given time.
+//
+// Every other unbounded-growth table in this schema (monitor checks,
+// traffic aggregates) is pruned on a timer; this one was not, and a busy
+// site's login-failure/bot-scan noise alone would grow it forever. Ninety
+// days matches monitor-check retention — long enough to investigate an
+// incident after the fact, not a permanent record.
+func (s *Store) PruneAuditLogs(ctx context.Context, before time.Time) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM audit_logs WHERE created_at < ?`, before)
+	return err
 }
 
 // PriorSuccessfulLoginStats reports how many login_success entries exist
@@ -200,14 +244,18 @@ func (s *Store) DeleteAuditLogs(ctx context.Context, userID *string) (int64, err
 }
 
 type AlertRule struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	PromQL         string     `json:"promql"`
-	Operator       string     `json:"operator"`
-	Threshold      float64    `json:"threshold"`
-	Channel        string     `json:"channel"`
-	Enabled        bool       `json:"enabled"`
-	LastState      string     `json:"lastState"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	PromQL    string  `json:"promql"`
+	Operator  string  `json:"operator"`
+	Threshold float64 `json:"threshold"`
+	Enabled   bool    `json:"enabled"`
+	LastState string  `json:"lastState"`
+	// PendingState/PendingSince track a breach that has not yet lasted long
+	// enough to be reported — see firingDebounce in the alerts package.
+	// Internal to the engine, never sent to clients.
+	PendingState   string     `json:"-"`
+	PendingSince   *time.Time `json:"-"`
 	LastNotifiedAt *time.Time `json:"lastNotifiedAt,omitempty"`
 	SnoozedUntil   *time.Time `json:"snoozedUntil,omitempty"`
 	AckedAt        *time.Time `json:"ackedAt,omitempty"`
@@ -216,16 +264,28 @@ type AlertRule struct {
 
 func (s *Store) CreateAlertRule(ctx context.Context, r AlertRule) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO alert_rules (id, name, promql, operator, threshold, channel, enabled, last_state)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, 'ok')`,
-		r.ID, r.Name, r.PromQL, r.Operator, r.Threshold, r.Channel, r.Enabled,
+		`INSERT INTO alert_rules (id, name, promql, operator, threshold, enabled, last_state)
+		 VALUES (?, ?, ?, ?, ?, ?, 'ok')`,
+		r.ID, r.Name, r.PromQL, r.Operator, r.Threshold, r.Enabled,
+	)
+	return err
+}
+
+// UpdateAlertRule changes a rule's definition. State (last/pending) is left
+// untouched — editing the threshold of a currently-firing rule shouldn't
+// pretend it was never firing, the next evaluation re-decides on its own.
+func (s *Store) UpdateAlertRule(ctx context.Context, id, name, promql, operator string, threshold float64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE alert_rules SET name = ?, promql = ?, operator = ?, threshold = ? WHERE id = ?`,
+		name, promql, operator, threshold, id,
 	)
 	return err
 }
 
 func (s *Store) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, promql, operator, threshold, channel, enabled, last_state, last_notified_at, snoozed_until, acked_at, created_at
+		`SELECT id, name, promql, operator, threshold, enabled, last_state, pending_state, pending_since,
+		        last_notified_at, snoozed_until, acked_at, created_at
 		 FROM alert_rules ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -236,9 +296,13 @@ func (s *Store) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 	rules := []AlertRule{}
 	for rows.Next() {
 		var r AlertRule
-		var lastNotified, snoozedUntil, ackedAt sql.NullTime
-		if err := rows.Scan(&r.ID, &r.Name, &r.PromQL, &r.Operator, &r.Threshold, &r.Channel, &r.Enabled, &r.LastState, &lastNotified, &snoozedUntil, &ackedAt, &r.CreatedAt); err != nil {
+		var pendingSince, lastNotified, snoozedUntil, ackedAt sql.NullTime
+		if err := rows.Scan(&r.ID, &r.Name, &r.PromQL, &r.Operator, &r.Threshold, &r.Enabled, &r.LastState,
+			&r.PendingState, &pendingSince, &lastNotified, &snoozedUntil, &ackedAt, &r.CreatedAt); err != nil {
 			return nil, err
+		}
+		if pendingSince.Valid {
+			r.PendingSince = &pendingSince.Time
 		}
 		if lastNotified.Valid {
 			r.LastNotifiedAt = &lastNotified.Time
@@ -265,6 +329,15 @@ func (s *Store) SetAlertRuleSnooze(ctx context.Context, id string, until *time.T
 // human — purely informational, doesn't change notification behavior.
 func (s *Store) SetAlertRuleAck(ctx context.Context, id string, at *time.Time) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE alert_rules SET acked_at = ? WHERE id = ?`, at, id)
+	return err
+}
+
+// SetAlertRulePending records a breach that is still inside its debounce
+// window (or clears it, with an empty state and nil since) — see
+// firingDebounce in the alerts package. Stored rather than held in memory
+// so the countdown survives a restart instead of resetting it.
+func (s *Store) SetAlertRulePending(ctx context.Context, id, state string, since *time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE alert_rules SET pending_state = ?, pending_since = ? WHERE id = ?`, state, since, id)
 	return err
 }
 
@@ -321,9 +394,13 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id string) error {
 
 // UpdateAlertRuleState also clears any acknowledgement — a new state
 // transition means a new incident, which should require a fresh ack.
+// UpdateAlertRuleState commits a state transition. Clears any pending
+// breach at the same time — the transition it was counting towards either
+// just landed (nothing left to count) or was overtaken by the opposite
+// direction resolving first (the count no longer means anything).
 func (s *Store) UpdateAlertRuleState(ctx context.Context, id, state string, notifiedAt time.Time) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE alert_rules SET last_state = ?, last_notified_at = ?, acked_at = NULL WHERE id = ?`,
+		`UPDATE alert_rules SET last_state = ?, last_notified_at = ?, acked_at = NULL, pending_state = '', pending_since = NULL WHERE id = ?`,
 		state, notifiedAt, id,
 	)
 	return err
@@ -410,6 +487,15 @@ func (s *Store) CreateDatasource(ctx context.Context, d Datasource) error {
 		`INSERT INTO datasources (id, name, url, type) VALUES (?, ?, ?, ?)`,
 		d.ID, d.Name, d.URL, d.Type,
 	)
+	return err
+}
+
+// UpdateDatasource changes a datasource's name and URL in place. The
+// router's cached HTTP client for this datasource must be dropped by the
+// caller after this — a stale client would otherwise keep talking to
+// wherever the URL used to point.
+func (s *Store) UpdateDatasource(ctx context.Context, id, name, url string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE datasources SET name = ?, url = ? WHERE id = ?`, name, url, id)
 	return err
 }
 
@@ -506,6 +592,23 @@ func (s *Store) CreateMonitor(ctx context.Context, m Monitor) error {
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.Name, m.Type, m.Target, m.IntervalSeconds,
 		m.Method, m.RequestBody, m.ContentType, m.ExpectedStatus, m.ExpectBodyContains,
+	)
+	return err
+}
+
+// UpdateMonitor replaces a monitor's definition in place. Alert/history
+// state (alert_state, consecutive_failures, cert_expires_at, snoozed_until,
+// etc.) is left untouched — editing a monitor's target doesn't erase what
+// it observed under the old one, and the next check re-decides state fresh
+// against whatever the edited definition now points at.
+func (s *Store) UpdateMonitor(ctx context.Context, m Monitor) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE monitors SET name = ?, type = ?, target = ?, interval_seconds = ?,
+		        method = ?, request_body = ?, content_type = ?, expected_status = ?, expect_body_contains = ?
+		 WHERE id = ?`,
+		m.Name, m.Type, m.Target, m.IntervalSeconds,
+		m.Method, m.RequestBody, m.ContentType, m.ExpectedStatus, m.ExpectBodyContains,
+		m.ID,
 	)
 	return err
 }
@@ -1120,6 +1223,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE monitors ADD COLUMN expect_body_contains TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE monitor_checks ADD COLUMN status_code INTEGER`,
 		`ALTER TABLE monitors ADD COLUMN cert_warned_for DATETIME`,
+		`ALTER TABLE alert_rules ADD COLUMN pending_state TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE alert_rules ADD COLUMN pending_since DATETIME`,
+		`ALTER TABLE audit_logs ADD COLUMN detail TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err

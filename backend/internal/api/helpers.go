@@ -35,6 +35,11 @@ var (
 	errHeadNoBodyAssertion       = errors.New("HEAD istegi govde dondurmez, beklenen icerik ile birlikte kullanilamaz")
 	errInvalidExpectedStatus     = errors.New("beklenen durum kodu 100-599 arasinda, virgulle ayrilmis sayilardan olusmali")
 	errRequestBodyTooLarge       = errors.New("istek govdesi cok buyuk (en fazla 16 KB)")
+	errAlertNotFound             = errors.New("alarm kurali bulunamadi")
+	errIntervalOutOfRange        = errors.New("kontrol araligi 15-3600 saniye arasinda olmali")
+	errUserNotFound              = errors.New("kullanici bulunamadi")
+	errInvalidDatasourceURL      = errors.New("veri kaynagi adresi http:// veya https:// ile baslayan gecerli bir URL olmali")
+	errLastSuperAdmin            = errors.New("son super_admin hesabinin rolu degistirilemez veya silinemez")
 )
 
 func parseUnixTime(v string) (time.Time, error) {

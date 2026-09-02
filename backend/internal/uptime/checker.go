@@ -90,6 +90,15 @@ func (c *Checker) Run(ctx context.Context) {
 			if err := c.db.PruneOldMonitorChecks(ctx, time.Now().Add(-historyMaxAge)); err != nil {
 				c.log.Warn("eski izleme kayitlari silinemedi", "hata", err.Error())
 			}
+			// Audit logs share this ticker rather than getting their own:
+			// nothing else in this package touches them, but they are the
+			// one remaining table with unbounded growth and no retention —
+			// every other one (this table included) already gets pruned
+			// here, so bot-scan and failed-login noise doesn't grow the
+			// database forever on a busy site.
+			if err := c.db.PruneAuditLogs(ctx, time.Now().Add(-historyMaxAge)); err != nil {
+				c.log.Warn("eski log kayitlari silinemedi", "hata", err.Error())
+			}
 		}
 	}
 }

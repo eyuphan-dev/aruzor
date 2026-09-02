@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n/context";
 import { useAuth } from "@/lib/auth/context";
-import { getSettings, updateSetting, updateSettingValue, type Settings } from "@/lib/api";
+import { getSettings, updateSetting, updateSettingValue, sendTestNotification, type Settings, type NotificationTestResult } from "@/lib/api";
 import { createBackup, parseBackup, restoreBackup, type RestoreReport } from "@/lib/backup";
 
 export default function SettingsPage() {
@@ -18,6 +18,8 @@ export default function SettingsPage() {
   const [report, setReport] = useState<RestoreReport | null>(null);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [savingWebhook, setSavingWebhook] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResults, setTestResults] = useState<NotificationTestResult[] | null>(null);
 
 
   useEffect(() => {
@@ -89,6 +91,19 @@ export default function SettingsPage() {
       setError((err as Error).message);
     } finally {
       setSavingWebhook(false);
+    }
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setError(null);
+    setTestResults(null);
+    try {
+      setTestResults(await sendTestNotification());
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -178,6 +193,38 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      <div className="flex flex-col gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+        <div>
+          <div className="text-sm font-medium">{t.settingsPage.testTitle}</div>
+          <div className="text-xs text-[var(--color-text-muted)]">{t.settingsPage.testHint}</div>
+        </div>
+        <button
+          onClick={runTest}
+          disabled={testing}
+          className="min-h-9 w-fit rounded-md border border-[var(--color-border)] px-4 text-sm font-medium hover:bg-[var(--color-border)]/30 disabled:opacity-60"
+        >
+          {testing ? t.settingsPage.testSending : t.settingsPage.testSend}
+        </button>
+        {testResults !== null && (
+          <ul className="flex flex-col gap-1 text-xs">
+            {testResults.length === 0 ? (
+              <li className="text-[var(--color-text-muted)]">{t.settingsPage.testNoChannels}</li>
+            ) : (
+              testResults.map((r) => (
+                <li key={r.channel} className="flex items-center gap-2">
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: r.ok ? "var(--color-success)" : "var(--color-danger)" }}
+                  />
+                  <span className="font-medium">{r.channel}</span>
+                  {!r.ok && <span className="text-[var(--color-danger)]">— {r.error}</span>}
+                </li>
+              ))
+            )}
+          </ul>
+        )}
+      </div>
 
       <div className="flex flex-col gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4">
         <div>

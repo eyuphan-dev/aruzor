@@ -29,7 +29,21 @@ export const BACKUP_VERSION = 1;
 
 type BackupDashboard = { id: string; title: string; definition: DashboardDefinition };
 type BackupAlert = { name: string; promql: string; operator: AlertOperator; threshold: number };
-type BackupMonitor = { name: string; type: MonitorType; target: string; intervalSeconds: number };
+// Mirrors MonitorInput's optional custom-HTTP-check fields exactly. Left
+// off a monitor that never used them (undefined, not written to the file at
+// all — see createBackup below), so a backup made before that feature
+// existed and one made after it but unused both restore identically.
+type BackupMonitor = {
+  name: string;
+  type: MonitorType;
+  target: string;
+  intervalSeconds: number;
+  method?: string;
+  requestBody?: string;
+  contentType?: string;
+  expectedStatus?: string;
+  expectBodyContains?: string;
+};
 type BackupDatasource = { name: string; url: string; type: string };
 
 export type Backup = {
@@ -83,6 +97,15 @@ export async function createBackup(): Promise<Backup> {
       type: m.type,
       target: m.target,
       intervalSeconds: m.intervalSeconds,
+      // Custom HTTP check fields (method/body/expected status/expected
+      // content) — omitted rather than written as empty strings, so a
+      // restored monitor that never used them looks exactly like one
+      // created fresh, not like one with a check nobody configured.
+      method: m.method || undefined,
+      requestBody: m.requestBody || undefined,
+      contentType: m.contentType || undefined,
+      expectedStatus: m.expectedStatus || undefined,
+      expectBodyContains: m.expectBodyContains || undefined,
     })),
     // The "default" datasource is recreated by the server on first boot and
     // points at whatever Prometheus that machine found. Carrying the old
@@ -174,7 +197,17 @@ export async function restoreBackup(backup: Backup): Promise<RestoreReport> {
       continue;
     }
     try {
-      await createMonitor({ name: m.name, type: m.type, target: m.target, intervalSeconds: m.intervalSeconds });
+      await createMonitor({
+        name: m.name,
+        type: m.type,
+        target: m.target,
+        intervalSeconds: m.intervalSeconds,
+        method: m.method,
+        requestBody: m.requestBody,
+        contentType: m.contentType,
+        expectedStatus: m.expectedStatus,
+        expectBodyContains: m.expectBodyContains,
+      });
       report.monitors.created++;
       monitorNames.add(m.name);
     } catch (err) {

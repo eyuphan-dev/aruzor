@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n/context";
 import {
   listAlertRules,
   createAlertRule,
+  updateAlertRule,
   setAlertRuleEnabled,
   deleteAlertRule,
   snoozeAlertRule,
@@ -37,6 +38,8 @@ export default function AlertsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AlertRule | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
   const [historyOpenFor, setHistoryOpenFor] = useState<string | null>(null);
   const [historyEvents, setHistoryEvents] = useState<AlertEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -70,15 +73,35 @@ export default function AlertsPage() {
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(refresh, []);
 
+  const resetForm = () => {
+    setName("");
+    setPromql("");
+    setOperator(">");
+    setThreshold("90");
+    setEditingId(null);
+  };
+
+  const startEdit = (rule: AlertRule) => {
+    setEditingId(rule.id);
+    setName(rule.name);
+    setPromql(rule.promql);
+    setOperator(rule.operator);
+    setThreshold(String(rule.threshold));
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
     try {
-      await createAlertRule({ name, promql, operator, threshold: Number(threshold) });
-      setName("");
-      setPromql("");
-      setThreshold("90");
+      const input = { name, promql, operator, threshold: Number(threshold) };
+      if (editingId) {
+        await updateAlertRule(editingId, input);
+      } else {
+        await createAlertRule(input);
+      }
+      resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -131,6 +154,7 @@ export default function AlertsPage() {
     if (!pendingDelete) return;
     try {
       await deleteAlertRule(pendingDelete.id);
+      if (editingId === pendingDelete.id) resetForm();
       refresh();
     } catch (err) {
       setError((err as Error).message);
@@ -157,10 +181,11 @@ export default function AlertsPage() {
 
       {canEdit && (
         <form
+          ref={formRef}
           onSubmit={handleSubmit}
           className="flex flex-col gap-3 rounded-xl border border-[var(--color-border)] bg-[var(--color-card)] p-4"
         >
-          <h2 className="text-sm font-semibold">{t.alerts.addTitle}</h2>
+          <h2 className="text-sm font-semibold">{editingId ? t.alerts.editTitle : t.alerts.addTitle}</h2>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-medium text-[var(--color-text-muted)]">{t.alerts.name}</label>
@@ -207,13 +232,24 @@ export default function AlertsPage() {
               />
             </div>
           </div>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="mt-1 w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
-          >
-            {t.alerts.add}
-          </button>
+          <div className="mt-1 flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={submitting}
+              className="w-fit rounded-md bg-[var(--color-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-60"
+            >
+              {editingId ? t.alerts.saveEdit : t.alerts.add}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="w-fit rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-border)]/30"
+              >
+                {t.dashboard.cancel}
+              </button>
+            )}
+          </div>
         </form>
       )}
 
@@ -283,6 +319,12 @@ export default function AlertsPage() {
                       <div className="flex flex-wrap gap-2">
                         {canEdit && (
                           <>
+                            <button
+                              onClick={() => startEdit(rule)}
+                              className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-border)]/30"
+                            >
+                              {t.alerts.edit}
+                            </button>
                             <button
                               onClick={() => toggle(rule)}
                               className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-border)]/30"
