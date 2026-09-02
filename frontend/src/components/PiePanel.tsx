@@ -77,13 +77,19 @@ export function PiePanel({
   });
 
   return (
-    <div className="flex h-full items-center gap-3 overflow-hidden">
-      <svg viewBox="0 0 140 140" className="h-full max-h-[150px] shrink-0">
+    // Stacked (svg above legend) below sm, side by side from sm up. A
+    // narrow phone panel gives the pie and the legend the same ~150px
+    // column when they sit side by side, which is what forced every label
+    // down to "K…" / "B…" no matter how short the names were — there just
+    // wasn't room. Stacking hands the legend the panel's full width
+    // instead, so labels have somewhere to actually be read.
+    <div className="flex h-full flex-col items-center gap-2 overflow-hidden sm:flex-row sm:gap-3">
+      <svg viewBox="0 0 140 140" className="h-auto max-h-[120px] w-auto shrink-0 sm:h-full sm:max-h-[150px]">
         {paths.map((p) => (
           <path key={p.label} d={p.d} fill={p.color} stroke="var(--color-card)" strokeWidth="1" />
         ))}
       </svg>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto text-xs">
+      <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto text-xs">
         {paths.map((p) => (
           <div key={p.label} className="flex items-center gap-1.5">
             <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: p.color }} />

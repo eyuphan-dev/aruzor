@@ -225,8 +225,20 @@ export function DashboardPanel({
   const source = panelSource(promQL);
 
   const header = (
-    <div className="mb-2 flex items-center gap-1">
-      <h3 className="truncate text-sm font-medium text-[var(--color-text)]" title={title}>
+    // flex-wrap rather than a fixed single row: the title, the source/
+    // duplicate badges and the action buttons (especially the chart-type
+    // picker, which expands into six icon buttons) do not all fit on one
+    // line at phone widths. Without wrapping, react-grid-layout's own
+    // overflow:hidden on each panel just clips whatever doesn't fit —
+    // which on a phone silently hid the pie/bar/stat buttons behind the
+    // panel's edge, not merely squeezed the title. Wrapping trades a
+    // taller header for every control staying reachable; sm: and up keeps
+    // the original single-row layout untouched.
+    <div className="mb-2 flex flex-wrap items-center gap-1">
+      <h3
+        className="min-w-0 flex-1 basis-full truncate text-sm font-medium text-[var(--color-text)] sm:basis-auto"
+        title={title}
+      >
         {title}
       </h3>
       {duplicate && (
@@ -259,11 +271,18 @@ export function DashboardPanel({
         </span>
       )}
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
         {/* Chart-type switcher: expands into the full row on click so the
             header stays uncluttered at small panel widths. */}
         {pickerOpen ? (
-          <div className="no-drag flex items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5">
+          // The six type buttons are one flex child of the wrapping header
+          // row above, so wrapping only there was not enough — this box
+          // itself was wider than the panel and got clipped by the grid
+          // item's own overflow:hidden, hiding the pie/bar/stat buttons off
+          // a phone's edge instead of just crowding the header. It needs to
+          // wrap onto its own second row internally, and never claim more
+          // width than the panel actually has.
+          <div className="no-drag flex max-w-full flex-wrap items-center gap-0.5 rounded-md border border-[var(--color-border)] p-0.5">
             {PANEL_TYPES.map((type) => (
               <IconButton
                 key={type}
