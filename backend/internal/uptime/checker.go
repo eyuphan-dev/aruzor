@@ -36,6 +36,22 @@ const (
 	// Five minutes is roughly the line between a stall and an outage: below
 	// it a visitor retries and gets in, above it the site is simply gone.
 	outageThreshold = 5 * time.Minute
+
+	// How close a TLS certificate has to be to expiring before the chat is
+	// told.
+	//
+	// The monitor page has shown a certificate's remaining life all along,
+	// but only to whoever went and looked at that particular monitor — which
+	// nobody does on the one week of the year it matters. An expired
+	// certificate takes a site down completely and is entirely preventable,
+	// so it is worth an interruption.
+	//
+	// Seven days is enough to renew by hand on a working day without the
+	// message arriving so early that it gets dismissed and forgotten. The
+	// warning card in the app still appears at fourteen days: it costs
+	// nothing to see it earlier, and interrupting somebody is a different
+	// bar from showing them something.
+	certWarningWindow = 7 * 24 * time.Hour
 )
 
 // Notifier is the alerting channel. Nil when Telegram isn't configured, in
@@ -138,6 +154,99 @@ func (c *Checker) checkOne(ctx context.Context, m store.Monitor) {
 	}
 
 	c.updateAlertState(ctx, m, res)
+	c.warnOnExpiringCert(ctx, m, res.certExpiry)
+}
+
+// warnOnExpiringCert announces a certificate that is about to run out.
+//
+// It is deliberately separate from the outage path: an expiring certificate
+// is not a failure, the monitor is still green, and folding it into the
+// up/down state machine would mean a healthy service reporting itself down.
+func (c *Checker) warnOnExpiringCert(ctx context.Context, m store.Monitor, expiry *time.Time) {
+	d := decideCertWarning(certInput{
+		name:      m.Name,
+		expiry:    expiry,
+		warnedFor: m.CertWarnedFor,
+		now:       time.Now(),
+	})
+	if !d.notify || c.notifier == nil {
+		return
+	}
+	if m.SnoozedUntil != nil && m.SnoozedUntil.After(time.Now()) {
+		// Not marked as warned, so the message goes out once the snooze
+		// ends rather than being lost to a maintenance window.
+		c.log.Info("izleme susturulmus, sertifika uyarisi atlandi", "izleme", m.Name)
+		return
+	}
+	if err := c.notifier.SendAlert(ctx, d.message); err != nil {
+		c.log.Warn("sertifika uyarisi gonderilemedi", "izleme", m.Name, "hata", err.Error())
+		return
+	}
+	// Written only after the message actually left, so a failed send is
+	// retried on the next check instead of being silently swallowed.
+	if err := c.db.SetMonitorCertWarned(ctx, m.ID, *expiry); err != nil {
+		c.log.Error("sertifika uyari durumu kaydedilemedi", "izleme", m.Name, "hata", err.Error())
+	}
+	c.log.Info("sertifika uyarisi gonderildi", "izleme", m.Name, "bitis", expiry)
+}
+
+type certInput struct {
+	name      string
+	expiry    *time.Time
+	warnedFor *time.Time
+	now       time.Time
+}
+
+type certDecision struct {
+	notify  bool
+	message string
+}
+
+// decideCertWarning is the whole certificate-warning policy, kept free of
+// the database so it can be tested directly.
+func decideCertWarning(in certInput) certDecision {
+	// No certificate observed: a TCP monitor, a plain-HTTP target, or a
+	// check that never got far enough to see one.
+	if in.expiry == nil {
+		return certDecision{}
+	}
+	remaining := in.expiry.Sub(in.now)
+	if remaining > certWarningWindow {
+		return certDecision{}
+	}
+	// Already expired is not a warning, it is an outage — and the probe
+	// already reports it as one, with the certificate named as the cause.
+	// Sending both would say the same thing twice in different words.
+	if remaining <= 0 {
+		return certDecision{}
+	}
+	// One message per certificate. A renewal changes the expiry date, which
+	// is why the date is what gets remembered: the new certificate does not
+	// match the warned-about one, so it can be warned about in its turn.
+	if in.warnedFor != nil && in.warnedFor.Equal(*in.expiry) {
+		return certDecision{}
+	}
+
+	return certDecision{
+		notify: true,
+		message: fmt.Sprintf(
+			"🔐 %s sertifikasının süresi %s içinde doluyor.\n\nBitiş: %s\n\nYenilenmezse site tamamen erişilemez hale gelir.",
+			in.name, humanCertRemaining(remaining), in.expiry.Local().Format("02.01.2006 15:04"),
+		),
+	}
+}
+
+// humanCertRemaining reads in days down to the last one, then in hours.
+// "0 gün" on the final day would be both alarming and wrong.
+func humanCertRemaining(d time.Duration) string {
+	if days := int(d.Hours() / 24); days >= 1 {
+		return fmt.Sprintf("%d gün", days)
+	}
+	hours := int(d.Hours())
+	if hours < 1 {
+		return "1 saatten az"
+	}
+	return fmt.Sprintf("%d saat", hours)
 }
 
 // updateAlertState decides whether this result changes what the chat has

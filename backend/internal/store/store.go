@@ -464,7 +464,12 @@ type Monitor struct {
 	LastCheckedAt   *time.Time `json:"lastCheckedAt,omitempty"`
 	LastLatencyMs   *int       `json:"lastLatencyMs,omitempty"`
 	CertExpiresAt   *time.Time `json:"certExpiresAt,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
+	// The expiry date a warning has already been sent for. Storing the date
+	// rather than a boolean is what makes a renewal reset the warning by
+	// itself: the new certificate has a different expiry, so it no longer
+	// matches what was warned about. Internal state, never sent to clients.
+	CertWarnedFor *time.Time `json:"-"`
+	CreatedAt     time.Time  `json:"createdAt"`
 
 	// AlertState is what the chat has already been told: "ok" or "down".
 	// It is deliberately separate from LastOK, which is the raw result of
@@ -508,7 +513,7 @@ func (s *Store) CreateMonitor(ctx context.Context, m Monitor) error {
 func (s *Store) ListMonitors(ctx context.Context) ([]Monitor, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, name, type, target, interval_seconds, last_ok, last_checked_at, last_latency_ms,
-		        cert_expires_at, alert_state, consecutive_failures, failing_since, snoozed_until,
+		        cert_expires_at, cert_warned_for, alert_state, consecutive_failures, failing_since, snoozed_until,
 		        method, request_body, content_type, expected_status, expect_body_contains, created_at
 		 FROM monitors ORDER BY created_at ASC`,
 	)
@@ -523,9 +528,9 @@ func (s *Store) ListMonitors(ctx context.Context) ([]Monitor, error) {
 		var lastOK sql.NullBool
 		var lastCheckedAt sql.NullTime
 		var lastLatency sql.NullInt64
-		var certExpires, failingSince, snoozedUntil sql.NullTime
+		var certExpires, certWarnedFor, failingSince, snoozedUntil sql.NullTime
 		if err := rows.Scan(&m.ID, &m.Name, &m.Type, &m.Target, &m.IntervalSeconds, &lastOK, &lastCheckedAt, &lastLatency,
-			&certExpires, &m.AlertState, &m.ConsecutiveFailures, &failingSince, &snoozedUntil,
+			&certExpires, &certWarnedFor, &m.AlertState, &m.ConsecutiveFailures, &failingSince, &snoozedUntil,
 			&m.Method, &m.RequestBody, &m.ContentType, &m.ExpectedStatus, &m.ExpectBodyContains, &m.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -541,6 +546,9 @@ func (s *Store) ListMonitors(ctx context.Context) ([]Monitor, error) {
 		}
 		if certExpires.Valid {
 			m.CertExpiresAt = &certExpires.Time
+		}
+		if certWarnedFor.Valid {
+			m.CertWarnedFor = &certWarnedFor.Time
 		}
 		if failingSince.Valid {
 			m.FailingSince = &failingSince.Time
@@ -671,6 +679,15 @@ func (s *Store) SetMonitorAlertState(ctx context.Context, monitorID, state strin
 // first. The detail view needs a whole day to show when a service was
 // struggling, which is far more rows than anyone wants to read one by one —
 // the caller reduces them to buckets before they leave the server.
+// SetMonitorCertWarned records which certificate expiry a warning has
+// already gone out for, so the same certificate is only ever announced
+// once no matter how often the monitor runs.
+func (s *Store) SetMonitorCertWarned(ctx context.Context, monitorID string, expiry time.Time) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE monitors SET cert_warned_for = ? WHERE id = ?`, expiry, monitorID)
+	return err
+}
+
 func (s *Store) ListMonitorChecksSince(ctx context.Context, monitorID string, since time.Time) ([]MonitorCheck, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, ok, latency_ms, error_class, error_detail, attempts, connect_ms, tls_ms, status_code, checked_at
@@ -1102,6 +1119,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE monitors ADD COLUMN expected_status TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE monitors ADD COLUMN expect_body_contains TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE monitor_checks ADD COLUMN status_code INTEGER`,
+		`ALTER TABLE monitors ADD COLUMN cert_warned_for DATETIME`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err

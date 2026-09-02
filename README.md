@@ -34,7 +34,7 @@ exporter'lar için hazır panelleri önerir ve çalışan bir gösterge paneliyl
 | **Alarm kuralları** | Bir eşik aşıldığında Telegram'dan anlık bildirim; değişiklik olmazsa günde bir özet. Bakım için susturulabilir. |
 | **Servis izleme** | Prometheus'tan bağımsız HTTP/TCP kontrolleri. Kesinti olduğunda sebebi de söylenir: sertifika mı, güvenlik duvarı mı, sunucu mu, uygulama mı. |
 | **Trafik analizi** | Web sunucusunun erişim logundan: istek hızı, giden bant genişliği, domain ve servis kırılımı, en çok istek atan ve en çok bant tüketen IP'ler, en çok istenen yollar, istemciler, 5xx hatalar, yetkisiz denemeler ve son istekler. |
-| **Sertifika uyarısı** | SSL sertifikasının süresi dolmadan 14 gün önce haber verir — kesintiyi olduktan sonra teşhis etmektense hiç olmaması iyidir. |
+| **Sertifika uyarısı** | SSL sertifikasının süresi dolmasına 7 gün kalınca Telegram/webhook/tarayıcı bildirimi gider, izleme sayfasında 14 gün kala görünür. Her sertifika için tek mesaj; yenilenince kendiliğinden sıfırlanır. |
 | **Bakım penceresi** | Planlı bir kesinti öncesi bildirimleri geçici olarak durdurun — kontrol arka planda çalışmaya devam eder, geçmiş kaydı bozulmaz. |
 | **Çalışma süresi raporu** | 24 saat / 7 gün / 30 gün / 90 gün yüzdeleri ve günlük geçmiş şeridi — hem panelde hem herkese açık durum sayfasında. |
 | **Tarayıcı bildirimi** | Telegram açık olmasa bile, kesinti anında telefonun kilit ekranına bildirim düşer. Kurulum gerektirmez. |

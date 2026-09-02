@@ -7,7 +7,10 @@
 // /api. Offline, the app loads and reports that it cannot reach the server,
 // which is the honest answer.
 
-const VERSION = "aruzor-v1";
+// Bumped when a precached shell asset changes. The icons below are served
+// cache-first, so without this an already-installed app would keep showing
+// the old ones for as long as it lived.
+const VERSION = "aruzor-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 
 // Only assets that are safe to serve stale: they are content-hashed, and a
