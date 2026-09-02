@@ -11,6 +11,7 @@ import { TimeRangeControls } from "@/components/TimeRangeControls";
 import { ActionMenu, type Action } from "@/components/ActionMenu";
 import { ShortcutsHelp } from "@/components/ShortcutsHelp";
 import { DiscoveryPanel } from "@/components/DiscoveryPanel";
+import { TrafficStrip } from "@/components/TrafficStrip";
 import { ShareDialog } from "@/components/ShareDialog";
 import {
   getDashboard,
@@ -33,6 +34,7 @@ import { hasMinRole } from "@/lib/auth/roles";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { genId } from "@/lib/id";
 import { describeMetric } from "@/lib/metricDescriptions";
+import { disambiguateTitles, duplicatePanelIds, uniquePanelTitle } from "@/lib/panelSource";
 
 const ReactGridLayout = WidthProvider(Responsive);
 
@@ -44,6 +46,9 @@ const GRID_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 };
 const GRID_COLS = { lg: 12, md: 12, sm: 1, xs: 1, xxs: 1 };
 const STACKED_BREAKPOINTS = new Set(["sm", "xs", "xxs"]);
 const STACKED_MIN_HEIGHT = 4;
+// Half a row: what every built-in template and every discovered panel uses,
+// and the width a panel is restored to when its stored one is unusable.
+const DEFAULT_PANEL_WIDTH = 6;
 const ACTIVE_DASHBOARD_STORAGE_KEY = "aruzor-active-dashboard";
 const HOST_STORAGE_KEY = "aruzor.dashboard.host";
 const RANGE_STORAGE_KEY = "aruzor-time-range";
@@ -258,6 +263,13 @@ export default function DashboardPage() {
     // back would overwrite the real desktop arrangement the moment someone
     // opened the dashboard on a phone.
     if (stacked) return;
+    // A second, shape-based guard on the same thing. `breakpoint` is state
+    // updated by a callback, so on the very first render at a phone width it
+    // still says "lg" while the grid has already laid out and reported the
+    // stacked layout — which is exactly how dashboards ended up saved with
+    // every panel one column wide. A layout where nothing is wider than one
+    // column is never something anyone arranged on a twelve-column grid.
+    if (layout.length > 1 && layout.every((l) => l.w <= 1)) return;
     const byId = new Map(layout.map((l) => [l.i, l]));
     setDef({
       ...def,
@@ -347,15 +359,30 @@ export default function DashboardPage() {
 
     let nextY = def.panels.reduce((m, p) => Math.max(m, p.y + p.h), 0);
     const added: PanelLayout[] = [];
+    // Titles already in use, updated as panels are added so two panels
+    // inside the same template cannot collide with each other either.
+    const takenTitles = new Set(def.panels.map((p) => p.title));
+    // A template is only offered when at least one of its panels is missing,
+    // so the ones already present have to be skipped individually — adding
+    // them again is what produced identical charts side by side.
+    const existingPromql = new Set(def.panels.map((p) => p.promql));
+    let skipped = 0;
     let x = 0;
     for (const p of template.panels) {
+      if (existingPromql.has(p.promql)) {
+        skipped++;
+        continue;
+      }
       if (x + p.w > 12) {
         x = 0;
         nextY += p.h;
       }
+      existingPromql.add(p.promql);
+      const title = uniquePanelTitle(p.title[locale], p.promql, takenTitles, locale);
+      takenTitles.add(title);
       added.push({
         id: genId(),
-        title: p.title[locale],
+        title,
         promql: p.promql,
         color: p.color,
         x,
@@ -366,9 +393,13 @@ export default function DashboardPage() {
       x += p.w;
     }
 
-    setDef({ ...def, panels: [...def.panels, ...added] });
+    if (added.length > 0) setDef({ ...def, panels: [...def.panels, ...added] });
     setSelectedTemplateId("");
-    setNotice(t.dashboard.templateAddedNotice);
+    setNotice(
+      skipped > 0
+        ? `${added.length} ${t.discovery.addedCount} · ${skipped} ${t.discovery.skippedCount}`
+        : t.dashboard.templateAddedNotice,
+    );
   };
 
   // Turns a detected exporter into real panels. Laid out two-per-row at the
@@ -378,14 +409,34 @@ export default function DashboardPage() {
     let nextY = def.panels.reduce((m, p) => Math.max(m, p.y + p.h), 0);
     let x = 0;
     const added: PanelLayout[] = [];
+    const existingPromql = new Set(def.panels.map((p) => p.promql));
+    const takenTitles = new Set(def.panels.map((p) => p.title));
+    let skipped = 0;
+
     for (const panel of integration.panels) {
+      // A discovered integration overlaps the built-in templates by design —
+      // both describe the same exporter. Adding a panel whose query is
+      // already on the dashboard would draw the identical chart twice under
+      // the identical name, which is what made these hard to tell apart.
+      if (existingPromql.has(panel.promql)) {
+        skipped++;
+        continue;
+      }
       if (x + 6 > 12) {
         x = 0;
         nextY += 4;
       }
+      const title = uniquePanelTitle(
+        locale === "tr" ? panel.titleTr : panel.titleEn,
+        panel.promql,
+        takenTitles,
+        locale,
+      );
+      takenTitles.add(title);
+      existingPromql.add(panel.promql);
       added.push({
         id: genId(),
-        title: locale === "tr" ? panel.titleTr : panel.titleEn,
+        title,
         promql: panel.promql,
         color: "#02c39a",
         x,
@@ -396,8 +447,15 @@ export default function DashboardPage() {
       });
       x += 6;
     }
-    setDef({ ...def, panels: [...def.panels, ...added] });
-    setNotice(t.discovery.addedNotice);
+
+    if (added.length > 0) setDef({ ...def, panels: [...def.panels, ...added] });
+    // Saying nothing when everything was skipped would look like the button
+    // did not work.
+    setNotice(
+      skipped > 0
+        ? `${added.length} ${t.discovery.addedCount} · ${skipped} ${t.discovery.skippedCount}`
+        : t.discovery.addedNotice,
+    );
   };
 
   const addVariable = () => {
@@ -548,7 +606,25 @@ export default function DashboardPage() {
     return <p className="text-sm text-[var(--color-text-muted)]">{t.dashboard.loading}</p>;
   }
 
-  const layout: Layout[] = def.panels.map((p) => ({ i: p.id, x: p.x, y: p.y, w: p.w, h: p.h }));
+  // Two panels reading "İşlemci Kullanımı" are indistinguishable on screen
+  // even though their queries differ. The stored titles are left untouched;
+  // only what is drawn is disambiguated.
+  const shownTitles = disambiguateTitles(def.panels, locale);
+  const duplicatePanels = duplicatePanelIds(def.panels);
+
+  // Dashboards saved by an older build could have the phone layout written
+  // over them, leaving panels one column of twelve wide — 8% of the screen,
+  // too narrow to draw a chart in. That is not a width anyone chose, so it
+  // is corrected on the way to the grid. The stored value is left alone
+  // until the dashboard is next saved, so nothing is rewritten behind the
+  // operator's back.
+  const layout: Layout[] = def.panels.map((p) => ({
+    i: p.id,
+    x: p.x,
+    y: p.y,
+    w: p.w <= 1 ? DEFAULT_PANEL_WIDTH : p.w,
+    h: p.h,
+  }));
 
   // The stored layout is the desktop one. Phones get a generated single
   // column in the same visual order rather than a squeezed version of it.
@@ -933,6 +1009,12 @@ export default function DashboardPage() {
         <DiscoveryPanel onAdd={addDiscovered} />
       )}
 
+      {/* Above the grid rather than inside it: the grid is PromQL panels the
+          operator chose, and traffic numbers come from the access log, not
+          from Prometheus. Renders nothing at all when the feature is not set
+          up or the signed-in role may not see it. */}
+      <TrafficStrip />
+
       <ReactGridLayout
         layouts={layouts}
         breakpoints={GRID_BREAKPOINTS}
@@ -947,7 +1029,8 @@ export default function DashboardPage() {
         {def.panels.map((p) => (
           <div key={p.id} className="relative">
             <DashboardPanel
-              title={p.title}
+              title={shownTitles[p.id] ?? p.title}
+              duplicate={duplicatePanels.has(p.id)}
               promQL={resolvePromQL(p.promql, varValues)}
               color={p.color}
               panelType={p.panelType}

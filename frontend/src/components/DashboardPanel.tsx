@@ -9,6 +9,7 @@ import { StatPanel } from "./StatPanel";
 import { GaugePanel } from "./GaugePanel";
 import { PiePanel } from "./PiePanel";
 import type { PanelType } from "@/lib/api";
+import { panelSource } from "@/lib/panelSource";
 
 // Chart kinds a user can flip between straight from the panel header —
 // the same set Grafana exposes in its visualisation picker, trimmed to the
@@ -98,6 +99,7 @@ export function DashboardPanel({
   refreshMs,
   refreshNonce,
   editable,
+  duplicate,
   shareToken,
   instanceFilter,
   onRemove,
@@ -114,6 +116,11 @@ export function DashboardPanel({
   refreshMs: number;
   refreshNonce: number;
   editable: boolean;
+  // True when another panel already draws this exact query in this exact
+  // visualisation. Marked rather than hidden: it is the operator's
+  // dashboard, and silently dropping one of their panels would be a worse
+  // surprise than telling them the two are the same.
+  duplicate?: boolean;
   // Present on a shared, read-only dashboard: queries go through the share
   // endpoint instead of the authenticated one.
   shareToken?: string;
@@ -124,7 +131,7 @@ export function DashboardPanel({
   onDuplicate: () => void;
   onChangeType: (type: PanelType) => void;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { series, extraSeries, loading, error, hostFilterApplied } = useMetricSeries(
     title,
     promQL,
@@ -211,11 +218,34 @@ export function DashboardPanel({
     </>
   );
 
+  // Which exporter this panel's numbers come from. Two panels titled
+  // "İşlemci Kullanımı" are only distinguishable once the page says one is
+  // reading the server and the other a container, and the badge carries the
+  // query itself as its tooltip for the cases where even that is not enough.
+  const source = panelSource(promQL);
+
   const header = (
     <div className="mb-2 flex items-center gap-1">
       <h3 className="truncate text-sm font-medium text-[var(--color-text)]" title={title}>
         {title}
       </h3>
+      {duplicate && (
+        <span
+          title={t.dashboard.duplicatePanelHint}
+          className="shrink-0 rounded-full border border-[var(--color-warning)] px-1.5 py-0.5 text-[10px] font-medium leading-none text-[var(--color-warning)]"
+        >
+          {t.dashboard.duplicatePanelBadge}
+        </span>
+      )}
+      {source && (
+        <span
+          title={promQL}
+          className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none"
+          style={{ backgroundColor: `${source.color}22`, color: source.color }}
+        >
+          {source.label[locale]}
+        </span>
+      )}
       <span
         className="ml-1 h-2 w-2 shrink-0 rounded-full"
         style={{ backgroundColor: error ? "var(--color-danger)" : "var(--color-success)" }}

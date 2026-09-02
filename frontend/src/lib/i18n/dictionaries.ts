@@ -133,6 +133,7 @@ export const dictionaries = {
       filters: { all: "Tümü", unauthorized: "Yetkisiz", errors: "5xx" },
       showAll: "Tümünü gör",
       showLess: "Daralt",
+      seeAll: "Trafik sayfasına git",
       notes: {
         paths: "Sayısal ve kimlik benzeri yol parçaları :id olarak gruplanır.",
         clients: "Tarayıcı ve bot ailesine göre gruplanır; tam istemci bilgisi son isteklerde görünür.",
@@ -251,6 +252,9 @@ export const dictionaries = {
       templateAlreadyAdded: "(eklendi)",
       addTemplate: "Şablonu Ekle",
       templateAddedNotice: "Şablon paneli eklendi, Kaydet'e basmayı unutma.",
+      duplicatePanelBadge: "yinelenen",
+      duplicatePanelHint:
+        "Bu panel, başka bir panelle birebir aynı sorguyu aynı grafik tipinde çiziyor. Düzenle moduna geçip silebilirsin.",
       templateAlreadyAddedNotice: "Bu şablon zaten eklenmiş, tekrar eklenemez.",
       variables: "Değişkenler",
       addVariable: "Değişken Ekle",
@@ -607,6 +611,11 @@ export const dictionaries = {
       nothingTitle: "Tanıdık bir exporter bulunamadı",
       nothingHint: "Prometheus çalışıyor ({count} metrik var) ama bilinen bir exporter göremedim. Node Exporter kurarsan sunucu panelleri otomatik gelir.",
       addedNotice: "Paneller eklendi. Kalıcı olması için Kaydet'e bas.",
+      // Used when a discovered integration overlaps panels the dashboard
+      // already has: the counts explain why fewer panels appeared than the
+      // integration listed.
+      addedCount: "panel eklendi",
+      skippedCount: "panel zaten vardı, atlandı. Kalıcı olması için Kaydet'e bas.",
     },
     setup: {
       title: "Aruzor'a Hoş Geldin",
@@ -775,6 +784,7 @@ export const dictionaries = {
       filters: { all: "All", unauthorized: "Unauthorized", errors: "5xx" },
       showAll: "Show all",
       showLess: "Show less",
+      seeAll: "Open the Traffic page",
       notes: {
         paths: "Numeric and id-like path segments are grouped as :id.",
         clients: "Grouped by browser and bot family; the full client string is on each recent request.",
@@ -893,6 +903,9 @@ export const dictionaries = {
       templateAlreadyAdded: "(added)",
       addTemplate: "Add Template",
       templateAddedNotice: "Template panels added, don't forget to hit Save.",
+      duplicatePanelBadge: "duplicate",
+      duplicatePanelHint:
+        "This panel draws the exact same query in the same chart type as another one. Switch to edit mode to remove it.",
       templateAlreadyAddedNotice: "This template is already added, it can't be added again.",
       variables: "Variables",
       addVariable: "Add Variable",
@@ -1249,6 +1262,8 @@ export const dictionaries = {
       nothingTitle: "No known exporter found",
       nothingHint: "Prometheus is running ({count} metrics) but I don't recognise any exporter. Install Node Exporter and server panels appear automatically.",
       addedNotice: "Panels added. Press Save to keep them.",
+      addedCount: "panels added",
+      skippedCount: "already present, skipped. Press Save to keep them.",
     },
     setup: {
       title: "Welcome to Aruzor",
