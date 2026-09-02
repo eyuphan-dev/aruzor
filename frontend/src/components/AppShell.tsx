@@ -86,15 +86,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen w-full">{children}</div>;
   }
 
-  const items: NavItem[] =
-    session.role === "super_admin"
-      ? [
-          ...navItems,
+  // Traffic reads the web server's access log, so it carries visitors' IP
+  // addresses and the URLs they asked for. The endpoint behind it is admin+
+  // for that reason, and a nav link to a page that would only return 403 is
+  // worse than no link at all.
+  const canSeeTraffic = session.role === "admin" || session.role === "super_admin";
+  const items: NavItem[] = [
+    ...navItems,
+    ...(canSeeTraffic ? [{ href: "/traffic", key: "traffic" } as NavItem] : []),
+    ...(session.role === "super_admin"
+      ? ([
           { href: "/users", key: "users" },
           { href: "/logs", key: "logs" },
           { href: "/settings", key: "settings" },
-        ]
-      : navItems;
+        ] as NavItem[])
+      : []),
+  ];
 
   // Whatever the tab bar cannot show goes in the sheet, so no destination is
   // unreachable on a phone whichever role is signed in.

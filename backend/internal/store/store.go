@@ -1107,5 +1107,9 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	return nil
+
+	// Traffic analytics keeps its own tables in store/traffic.go — they are
+	// a self-contained subsystem with their own retention rules, and mixing
+	// them into the schema literal above would bury that.
+	return s.migrateTraffic()
 }

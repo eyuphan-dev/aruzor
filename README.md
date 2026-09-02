@@ -33,6 +33,7 @@ exporter'lar için hazır panelleri önerir ve çalışan bir gösterge paneliyl
 | **Sürüklenebilir paneller** | Çizgi, alan, sütun, pasta, sayaç ve gösterge tipleri. Panel başlığından tip değiştirilir, CSV indirilir, tam ekran açılır. |
 | **Alarm kuralları** | Bir eşik aşıldığında Telegram'dan anlık bildirim; değişiklik olmazsa günde bir özet. Bakım için susturulabilir. |
 | **Servis izleme** | Prometheus'tan bağımsız HTTP/TCP kontrolleri. Kesinti olduğunda sebebi de söylenir: sertifika mı, güvenlik duvarı mı, sunucu mu, uygulama mı. |
+| **Trafik analizi** | Web sunucusunun erişim logundan: istek hızı, giden bant genişliği, domain ve servis kırılımı, en çok istek atan ve en çok bant tüketen IP'ler, en çok istenen yollar, istemciler, 5xx hatalar, yetkisiz denemeler ve son istekler. |
 | **Sertifika uyarısı** | SSL sertifikasının süresi dolmadan 14 gün önce haber verir — kesintiyi olduktan sonra teşhis etmektense hiç olmaması iyidir. |
 | **Bakım penceresi** | Planlı bir kesinti öncesi bildirimleri geçici olarak durdurun — kontrol arka planda çalışmaya devam eder, geçmiş kaydı bozulmaz. |
 | **Çalışma süresi raporu** | 24 saat / 7 gün / 30 gün / 90 gün yüzdeleri ve günlük geçmiş şeridi — hem panelde hem herkese açık durum sayfasında. |
@@ -141,6 +142,44 @@ dalgalanmalar arayüzdeki 24 saatlik sağlık şeridinde görünür.
 
 ---
 
+## Trafik analizi
+
+Prometheus exporter'ları bir sürecin sayaçlarını yayınlar, o sürece gelen tek
+tek istekleri değil. "Şu an hangi IP bizi dövüyor", "hangi yol en çok
+isteniyor", "hangi tarayıcıdan geliyor" sorularının cevabı yalnızca web
+sunucusunun erişim logunda vardır — bu yüzden Trafik sayfası Prometheus'a
+değil, doğrudan log dosyasına bakar.
+
+Ek kurulum gerekmez: nginx veya Apache'nin bilinen log konumları ilk açılışta
+denenir. Log dosyanız başka bir yerdeyse:
+
+```bash
+ARUZOR_ACCESS_LOG_PATHS=/www/wwwlogs/*.log
+```
+
+Standart `combined` formatı doğrudan çalışır. Domain kırılımı, servis
+kırılımı ve yanıt süresi panelleri için log formatına üç alan eklemek
+gerekir; Aruzor bu alanların eksik olduğunu fark eder ve ilgili panelde ne
+ekleneceğini yazar:
+
+```nginx
+log_format aruzor '$remote_addr - $remote_user [$time_local] "$request" '
+                  '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                  '"$host" $request_time "$upstream_addr"';
+
+access_log /www/wwwlogs/access.log aruzor;
+```
+
+Ham satırlar veritabanına yazılmaz. Dakikalık toplamlar, her dakikanın en çok
+istek alan kayıtları ve son isteklerden oluşan kısa bir kuyruk tutulur — yani
+sitenin trafiği ne kadar artarsa artsın veritabanı büyümesi sınırlı kalır.
+Veriler 7 gün saklanır.
+
+Sayfa ziyaretçilerin IP adreslerini ve istedikleri adresleri içerdiği için
+yalnızca **admin** ve **super_admin** rollerine açıktır.
+
+---
+
 ## Ortam değişkenleri
 
 Hepsi isteğe bağlıdır; `install.sh` gerekli olanları üretir.
@@ -157,6 +196,7 @@ Hepsi isteğe bağlıdır; `install.sh` gerekli olanları üretir.
 | `ARUZOR_ALERT_EVAL_INTERVAL` | `60s` | Alarm kurallarının kontrol sıklığı |
 | `ARUZOR_TELEGRAM_BOT_TOKEN` | _(boş = kapalı)_ | Bot token'ı |
 | `ARUZOR_TELEGRAM_CHAT_ID` | _(boş = kapalı)_ | Bildirimlerin gideceği sohbet |
+| `ARUZOR_ACCESS_LOG_PATHS` | _(otomatik)_ | Trafik analizi için erişim logu yolları; virgülle ayrılır, joker karakter ve `ad=yol` biçimi desteklenir |
 | `ARUZOR_DB_PATH` | `aruzor.db` | SQLite dosya yolu |
 | `ARUZOR_LISTEN_ADDR` | `:8080` | Backend'in dinlediği adres |
 | `ARUZOR_CORS_ORIGIN` | _(boş)_ | Yalnızca API'yi doğrudan başka bir origin'e açarsanız gerekir |

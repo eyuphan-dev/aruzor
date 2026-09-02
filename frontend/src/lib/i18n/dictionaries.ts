@@ -13,6 +13,7 @@ export const dictionaries = {
       users: "Kullanıcılar",
       datasources: "Veri Kaynakları",
       monitors: "İzlemeler",
+      traffic: "Trafik",
     },
     // Tab bar labels. Five tabs share a 360px screen, so the full names do
     // not fit; these are the same words trimmed, not different ones.
@@ -50,6 +51,93 @@ export const dictionaries = {
         login_rate_limited: "Çok fazla giriş denemesi (olası saldırı)",
         forbidden_attempt: "Yetkisiz işlem denemesi",
         login_new_ip: "Bilinmeyen adresten giriş",
+      },
+    },
+    traffic: {
+      title: "Trafik",
+      subtitle: "Web sunucusunun erişim loglarından: kim istek atıyor, ne alıyor, ne kadar bant tüketiyor.",
+      ranges: { "1h": "1 saat", "6h": "6 saat", "24h": "24 saat", "7d": "7 gün" },
+      refresh: "Yenile",
+      empty: "Bu aralıkta kayıt yok.",
+      // Two different empty pages that need completely different advice: no
+      // log file configured at all, versus one configured that has not
+      // produced a readable line yet.
+      disabledTitle: "Trafik analizi kapalı",
+      disabledBody:
+        "Aruzor bilinen konumlarda bir erişim logu bulamadı. Log dosyasının yolunu ARUZOR_ACCESS_LOG_PATHS ortam değişkeniyle tanımlayıp servisi yeniden başlatın.",
+      disabledExample: "Örnek:",
+      emptyTitle: "Henüz okunan istek yok",
+      emptyBody:
+        "Log dosyası tanımlı ama içinden çözümlenebilen bir istek satırı okunmadı. İlk veriler en geç bir dakika içinde görünür; görünmüyorsa dosya yolunu ve okuma iznini kontrol edin.",
+      configuredPaths: "Tanımlı log yolları",
+      sourcesTitle: "Log kaynakları",
+      sourcesColumns: {
+        name: "Ad",
+        path: "Dosya",
+        lines: "Okunan satır",
+        unparsed: "Çözümlenemeyen",
+        lastRead: "Son okuma",
+      },
+      unparsedHint:
+        "Çözümlenemeyen satır sayısı yüksekse log formatınız beklenenden farklı olabilir; aşağıdaki önerilen format doğrudan çalışır.",
+      // Shown in place of a panel whose field the log format does not carry.
+      // An empty chart and a chart that cannot be filled look identical, so
+      // the difference is spelled out together with the fix.
+      hostMissing:
+        "Bu panel için log formatında $host alanı gerekiyor. Aşağıdaki önerilen formatı kullanırsanız domain kırılımı da dolar.",
+      serviceMissing:
+        "Bu panel için log formatında $upstream_addr alanı gerekiyor. İsteği hangi arka uç servisin yanıtladığı ancak bu alanla bilinir.",
+      durationMissing: "Yanıt süresi için log formatında $request_time alanı gerekiyor.",
+      logFormatTitle: "Daha fazla panel için önerilen log formatı",
+      logFormatHint:
+        "Bu iki satırı nginx yapılandırmanızın http bloğuna ekleyin. Standart combined formatı da çalışır; bu format ek olarak domain, servis ve yanıt süresi panellerini doldurur.",
+      stats: {
+        requestRate: "İstek hızı",
+        egress: "Giden bant genişliği",
+        errorRate: "5xx oranı",
+        unauthorized: "Yetkisiz denemeler",
+        peak: "tepe",
+        total: "toplam",
+        avgDuration: "ort. yanıt",
+      },
+      panels: {
+        requestRate: "İstek hızı",
+        egress: "Giden bant genişliği",
+        statusCodes: "Durum kodu dağılımı",
+        services: "Servis dağılımı",
+        hosts: "Domain başına istek",
+        nodes: "Node dağılımı",
+        topIps: "En çok istek atan IP adresleri",
+        topIpsByBytes: "En çok bant tüketen IP adresleri",
+        topPaths: "En çok istenen yollar",
+        clients: "İstemciler",
+        methods: "HTTP metotları",
+        errorPaths: "5xx veren yollar",
+        unauthorized: "Yetkisiz denemeler",
+        recent: "Son istekler",
+      },
+      columns: {
+        requests: "İstek",
+        bytes: "Bant",
+        errors: "5xx",
+        time: "Zaman",
+        ip: "IP",
+        host: "Domain",
+        method: "Metot",
+        path: "Yol",
+        status: "Durum",
+        client: "İstemci",
+        node: "Node",
+        duration: "Süre",
+      },
+      filters: { all: "Tümü", unauthorized: "Yetkisiz", errors: "5xx" },
+      showAll: "Tümünü gör",
+      showLess: "Daralt",
+      notes: {
+        paths: "Sayısal ve kimlik benzeri yol parçaları :id olarak gruplanır.",
+        clients: "Tarayıcı ve bot ailesine göre gruplanır; tam istemci bilgisi son isteklerde görünür.",
+        unauthorized: "Yalnızca 401 ve 403 sayılır; 404 çoğunlukla kırık bağlantı veya tarama demektir.",
+        ranking: "Sıralamalar her dakikanın en çok istek alan kayıtları üzerinden hesaplanır.",
       },
     },
     dashboard: {
@@ -575,6 +663,7 @@ export const dictionaries = {
       users: "Users",
       datasources: "Datasources",
       monitors: "Monitors",
+      traffic: "Traffic",
     },
     navShort: {
       dashboard: "Home",
@@ -610,6 +699,87 @@ export const dictionaries = {
         login_rate_limited: "Too many login attempts (possible attack)",
         forbidden_attempt: "Unauthorized action attempt",
         login_new_ip: "Login from an unrecognized address",
+      },
+    },
+    traffic: {
+      title: "Traffic",
+      subtitle: "From the web server access log: who is calling, what they get back, and how much bandwidth it costs.",
+      ranges: { "1h": "1 hour", "6h": "6 hours", "24h": "24 hours", "7d": "7 days" },
+      refresh: "Refresh",
+      empty: "Nothing recorded in this range.",
+      disabledTitle: "Traffic analytics is off",
+      disabledBody:
+        "Aruzor found no access log in the usual places. Point ARUZOR_ACCESS_LOG_PATHS at your log file and restart the service.",
+      disabledExample: "Example:",
+      emptyTitle: "No requests read yet",
+      emptyBody:
+        "A log file is configured but no parsable request line has been read from it. The first data appears within a minute; if it does not, check the path and read permissions.",
+      configuredPaths: "Configured log paths",
+      sourcesTitle: "Log sources",
+      sourcesColumns: {
+        name: "Name",
+        path: "File",
+        lines: "Lines read",
+        unparsed: "Unparsed",
+        lastRead: "Last read",
+      },
+      unparsedHint:
+        "A high unparsed count usually means your log format differs from the expected one; the suggested format below works as-is.",
+      hostMissing:
+        "This panel needs $host in your log format. Using the suggested format below also fills in the per-domain breakdown.",
+      serviceMissing:
+        "This panel needs $upstream_addr in your log format. Which backend actually served a request is only knowable from that field.",
+      durationMissing: "Response time needs $request_time in your log format.",
+      logFormatTitle: "Suggested log format for the remaining panels",
+      logFormatHint:
+        "Add these two lines to the http block of your nginx config. The stock combined format works too; this one additionally fills the domain, service and response-time panels.",
+      stats: {
+        requestRate: "Request rate",
+        egress: "Egress bandwidth",
+        errorRate: "5xx rate",
+        unauthorized: "Unauthorized attempts",
+        peak: "peak",
+        total: "total",
+        avgDuration: "avg response",
+      },
+      panels: {
+        requestRate: "Request rate",
+        egress: "Egress bandwidth",
+        statusCodes: "Status code split",
+        services: "Service split",
+        hosts: "Requests per domain",
+        nodes: "Node split",
+        topIps: "Top requesting IPs",
+        topIpsByBytes: "Top bandwidth IPs",
+        topPaths: "Most requested paths",
+        clients: "Clients",
+        methods: "HTTP methods",
+        errorPaths: "Paths returning 5xx",
+        unauthorized: "Unauthorized attempts",
+        recent: "Recent requests",
+      },
+      columns: {
+        requests: "Requests",
+        bytes: "Bandwidth",
+        errors: "5xx",
+        time: "Time",
+        ip: "IP",
+        host: "Domain",
+        method: "Method",
+        path: "Path",
+        status: "Status",
+        client: "Client",
+        node: "Node",
+        duration: "Time",
+      },
+      filters: { all: "All", unauthorized: "Unauthorized", errors: "5xx" },
+      showAll: "Show all",
+      showLess: "Show less",
+      notes: {
+        paths: "Numeric and id-like path segments are grouped as :id.",
+        clients: "Grouped by browser and bot family; the full client string is on each recent request.",
+        unauthorized: "Only 401 and 403 count here, because a 404 is usually a broken link or a crawler.",
+        ranking: "Rankings are built from each minute's most active entries.",
       },
     },
     dashboard: {

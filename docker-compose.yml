@@ -44,8 +44,16 @@ services:
       ARUZOR_TIMEZONE: "${ARUZOR_TIMEZONE:-Europe/Istanbul}"
       ARUZOR_TELEGRAM_BOT_TOKEN: "${ARUZOR_TELEGRAM_BOT_TOKEN:-}"
       ARUZOR_TELEGRAM_CHAT_ID: "${ARUZOR_TELEGRAM_CHAT_ID:-}"
+      # Trafik sayfasi web sunucusunun erisim logunu okur. Bos birakilirsa
+      # asagida baglanan bilinen konumlara bakilir; loglariniz baska bir
+      # yerdeyse hem bu degiskeni hem asagidaki baglamayi guncelleyin.
+      ARUZOR_ACCESS_LOG_PATHS: "${ARUZOR_ACCESS_LOG_PATHS:-}"
     volumes:
       - aruzor-data:/data
+      # Salt okunur: Aruzor bu loglari yalnizca okur, hicbir zaman yazmaz
+      # veya dondurmez. Dizin sunucuda yoksa Docker bos olarak olusturur ve
+      # trafik analizi kapali kalir.
+      - /var/log/nginx:/var/log/nginx:ro
     depends_on:
       - prometheus
     restart: unless-stopped

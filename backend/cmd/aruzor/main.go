@@ -26,6 +26,7 @@ import (
 	"aruzor/internal/prometheus"
 	"aruzor/internal/store"
 	"aruzor/internal/telegram"
+	"aruzor/internal/traffic"
 	"aruzor/internal/uptime"
 )
 
@@ -75,7 +76,22 @@ func main() {
 	}
 
 	promClient := prometheus.NewClient(prometheusURL)
-	router := api.NewRouter(db, promClient, tokens, logger, corsOrigin, vapidPub)
+
+	// Traffic analytics reads the web server's access log directly rather
+	// than going through Prometheus — per-request facts (which IP, which
+	// path, which user agent) simply are not in any exporter's output. With
+	// no log configured and none found in the usual places the collector is
+	// nil, the endpoints report the feature as off, and the page explains
+	// how to switch it on.
+	collector := traffic.NewCollector(db, logger, os.Getenv("ARUZOR_ACCESS_LOG_PATHS"))
+	var trafficPaths []string
+	if collector != nil {
+		trafficPaths = collector.Sources()
+	} else {
+		logger.Info("erisim logu bulunamadi, trafik analizi kapali; ARUZOR_ACCESS_LOG_PATHS ile yol tanimlanabilir")
+	}
+
+	router := api.NewRouter(db, promClient, tokens, logger, corsOrigin, vapidPub, trafficPaths)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,6 +101,9 @@ func main() {
 	// about a threshold breach and a service outage the same way.
 	broadcaster := startAlertEngine(ctx, db, promClient, logger, vapidPub, vapidPriv)
 	go uptime.NewChecker(db, broadcaster, logger).Run(ctx)
+	if collector != nil {
+		go collector.Run(ctx)
+	}
 
 	server := &http.Server{Addr: addr, Handler: router}
 	go func() {

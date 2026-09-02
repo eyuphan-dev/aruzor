@@ -618,3 +618,95 @@ export function sharedQueryRange(token: string, promQL: string, start: number, e
   const params = new URLSearchParams({ query: promQL, start: String(start), end: String(end), step });
   return coalescedRange(`/api/v1/shared/${encodeURIComponent(token)}/query_range?${params}`);
 }
+
+// Traffic analytics. Unlike everything above, none of this comes from
+// Prometheus: it is read from the web server's own access log, because
+// per-request facts (which IP, which path, which client) are not something
+// any exporter publishes. Admin+ only, since it contains visitors' IP
+// addresses and the URLs they asked for.
+export type TrafficRange = "1h" | "6h" | "24h" | "7d";
+
+export type TrafficDim = { key: string; requests: number; bytes: number; errors: number };
+
+export type TrafficSource = {
+  id: string;
+  name: string;
+  path: string;
+  lines: number;
+  unparsed: number;
+  lastReadAt?: string;
+};
+
+export type TrafficPoint = {
+  at: number; // unix seconds
+  requests: number;
+  bytes: number;
+  s2xx: number;
+  s3xx: number;
+  s4xx: number;
+  s5xx: number;
+};
+
+export type TrafficRequestRow = {
+  id: number;
+  at: string;
+  source: string;
+  ip: string;
+  host?: string;
+  method: string;
+  path: string;
+  status: number;
+  bytes: number;
+  userAgent?: string;
+  service?: string;
+  durationMs?: number;
+};
+
+export type TrafficOverview = {
+  // enabled: a log path is configured or was auto-detected.
+  // hasData: something has actually been read from it. The two are
+  // different problems with different fixes, so the page is told both.
+  enabled: boolean;
+  hasData: boolean;
+  configuredPaths: string[];
+  sources: TrafficSource[];
+  // Which panels this log format can fill. False means the field is absent
+  // from log_format, not that nothing happened.
+  fields: { host: boolean; service: boolean; duration: boolean };
+  range: TrafficRange;
+  stepSeconds: number;
+  totals: {
+    requests: number;
+    bytes: number;
+    errors5xx: number;
+    errors4xx: number;
+    unauthorized: number;
+    requestsPerSecond: number;
+    bytesPerSecond: number;
+    peakRequestsPerSecond: number;
+    errorRate: number;
+    avgDurationMs: number;
+    hasDuration: boolean;
+  };
+  series: TrafficPoint[];
+  topIps: TrafficDim[];
+  topIpsByBytes: TrafficDim[];
+  topPaths: TrafficDim[];
+  topClients: TrafficDim[];
+  topHosts: TrafficDim[];
+  topServices: TrafficDim[];
+  nodes: TrafficDim[];
+  statusCodes: TrafficDim[];
+  methods: TrafficDim[];
+  errorPaths: TrafficDim[];
+  unauthorized: TrafficRequestRow[];
+  recent: TrafficRequestRow[];
+};
+
+export function getTraffic(range: TrafficRange) {
+  return apiRequest<TrafficOverview>(`/api/v1/traffic?range=${range}`);
+}
+
+export function getTrafficRequests(filter: "all" | "unauthorized" | "errors", range: TrafficRange) {
+  return apiRequest<TrafficRequestRow[]>(`/api/v1/traffic/requests?filter=${filter}&range=${range}`);
+}

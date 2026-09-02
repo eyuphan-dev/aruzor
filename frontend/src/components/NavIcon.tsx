@@ -4,6 +4,7 @@ export type NavKey =
   | "alerts"
   | "datasources"
   | "monitors"
+  | "traffic"
   | "users"
   | "logs"
   | "settings";
@@ -44,6 +45,14 @@ const paths: Record<NavKey, React.ReactNode> = {
   monitors: (
     <>
       <path d="M3 12h4l2.5-6 4 12L16 12h5" />
+    </>
+  ),
+  traffic: (
+    <>
+      <path d="M4 19V10" />
+      <path d="M9.5 19V5" />
+      <path d="M15 19v-6" />
+      <path d="M20.5 19V8" />
     </>
   ),
   users: (

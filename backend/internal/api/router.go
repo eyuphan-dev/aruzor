@@ -33,6 +33,12 @@ type Router struct {
 	statusPageLimiter *loginLimiter
 	vapidPublicKey    string
 
+	// The access-log globs the traffic collector was configured with, so the
+	// Traffic page can tell "nothing configured" apart from "configured but
+	// nothing read yet" — two empty pages that need completely different
+	// advice.
+	trafficPaths []string
+
 	dsClientsMu sync.Mutex
 	dsClients   map[string]*dsClientEntry // datasource id -> cached client
 }
@@ -42,7 +48,7 @@ type dsClientEntry struct {
 	client *prometheus.Client
 }
 
-func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssuer, log *slog.Logger, allowedOrigin, vapidPublicKey string) http.Handler {
+func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssuer, log *slog.Logger, allowedOrigin, vapidPublicKey string, trafficPaths []string) http.Handler {
 	r := &Router{
 		mux:               http.NewServeMux(),
 		db:                db,
@@ -53,6 +59,7 @@ func NewRouter(db *store.Store, prom *prometheus.Client, tokens *auth.TokenIssue
 		queryLimiter:      newLoginLimiter(120, time.Minute),
 		statusPageLimiter: newLoginLimiter(30, time.Minute),
 		vapidPublicKey:    vapidPublicKey,
+		trafficPaths:      trafficPaths,
 		dsClients:         make(map[string]*dsClientEntry),
 	}
 	r.routes()
@@ -233,6 +240,13 @@ func (r *Router) routes() {
 	r.mux.HandleFunc("DELETE /api/v1/dashboards/{id}/share", r.requireMinRole("editor", r.handleDeleteShare))
 	r.mux.HandleFunc("GET /api/v1/shared/{token}", r.handleSharedDashboard)
 	r.mux.HandleFunc("GET /api/v1/shared/{token}/query_range", r.handleSharedQueryRange)
+
+	// Traffic analytics is built from the web server's access log, so it
+	// carries visitors' IP addresses, the URLs they requested and their user
+	// agents. That is a step above what the metric endpoints expose, and it
+	// is not what a viewer or editor account is for — admin+ only.
+	r.mux.HandleFunc("GET /api/v1/traffic", r.requireMinRole("admin", r.handleTraffic))
+	r.mux.HandleFunc("GET /api/v1/traffic/requests", r.requireMinRole("admin", r.handleTrafficRequests))
 
 	r.mux.HandleFunc("GET /api/v1/logs", r.requireRole(RoleSuperAdmin, r.handleListLogs))
 	r.mux.HandleFunc("DELETE /api/v1/logs", r.requireRole(RoleSuperAdmin, r.handleDeleteLogs))
